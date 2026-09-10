@@ -40,8 +40,9 @@
   const RING_SPACING = 650;
   const LEARNING_RATE = 0.08;
 
-  const ringX = [-220, 200, -180, 220, -200, 180, -220, 210, -190, 200];
-  const rings = ringX.map((x, index) => ({ x, y: 0, z: 700 + index * RING_SPACING, color: RING_COLORS[index % RING_COLORS.length], result: null }));
+  const ringX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
+  const ringAngles = [-0.18, 0.52, -0.86, 0.28, 1.12, -0.42, 0.74, -1.02, 0.36, -0.64];
+  const rings = ringX.map((x, index) => ({ x, y: 0, z: 700 + index * RING_SPACING, angle: ringAngles[index], color: RING_COLORS[index % RING_COLORS.length], result: null }));
   const targetBlueprint = [{ x: -40, z: 1600 }, { x: 60, z: 4600 }];
 
   let width = 1000;
@@ -61,6 +62,7 @@
   let actionIndex = 2;
   let preferences = ACTIONS.map(() => ACTIONS.map(() => 0));
   let eligibility = ACTIONS.map(() => 0);
+  let sensorySeed = 0x4f1bbcdc;
   const neural = {
     visualLeft: 0,
     visualRight: 0,
@@ -70,7 +72,8 @@
     dopamine: 0,
     moveX: 0,
     context: 2,
-    fireCooldown: 0
+    fireCooldown: 0,
+    decisionTimer: 0
   };
 
   const three = {
@@ -80,13 +83,16 @@
     fly: null,
     frontLegs: [],
     wings: [],
-    ringMeshes: [],
-    targetMeshes: [],
     clock: 0
   };
 
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
   function lerp(a, b, amount) { return a + (b - a) * amount; }
+  function randomUnit() {
+    sensorySeed = (sensorySeed * 1664525 + 1013904223) >>> 0;
+    return sensorySeed / 4294967296;
+  }
+  function sensoryNoise(amount) { return (randomUnit() * 2 - 1) * amount; }
 
   function resetEpisode() {
     player = { x: 0, y: 0, z: 0 };
@@ -99,6 +105,8 @@
     lastReward = 0;
     rewardFlash = 0;
     neural.fireCooldown = 0;
+    neural.decisionTimer = 0;
+    sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
     rings.forEach((ring) => { ring.result = null; });
     syncUI();
     drawGame();
@@ -129,33 +137,75 @@
     return { x: width / 2 + (x - player.x) * scale, y: height / 2 + y * scale, scale, depth };
   }
 
-  function buildNeuralController(dt) {
-    const ring = rings[nextRingIndex] || rings[rings.length - 1];
-    const error = clamp((ring.x - player.x) / 180, -1, 1);
-    neural.context = clamp(Math.round(error * 2) + 2, 0, 4);
-    neural.visualLeft = lerp(neural.visualLeft, Math.max(0, -error), 1 - Math.exp(-dt * 12));
-    neural.visualRight = lerp(neural.visualRight, Math.max(0, error), 1 - Math.exp(-dt * 12));
-    neural.motorLeft = lerp(neural.motorLeft, neural.visualLeft, 1 - Math.exp(-dt * 9));
-    neural.motorRight = lerp(neural.motorRight, neural.visualRight, 1 - Math.exp(-dt * 9));
+  function sampleVisualObject(object, size, maxDepth) {
+    const depth = object.z - player.z;
+    if (depth <= 70 || depth >= maxDepth) return { left: 0, right: 0, center: 0, strength: 0 };
+    const projected = project(object.x, object.y || 0, object.z);
+    const screenCenter = clamp((projected.x - width / 2) / (width * 0.5), -1, 1);
+    const apparentSize = clamp(size * projected.scale / Math.max(width * 0.34, 1), 0, 1);
+    const depthStrength = clamp(1 - depth / maxDepth, 0, 1);
+    const strength = clamp((0.28 + apparentSize * 1.9) * depthStrength, 0, 1);
+    const left = strength * clamp(0.5 - screenCenter * 0.5, 0, 1) + sensoryNoise(0.045);
+    const right = strength * clamp(0.5 + screenCenter * 0.5, 0, 1) + sensoryNoise(0.045);
+    return {
+      left: clamp(left, 0, 1),
+      right: clamp(right, 0, 1),
+      center: 1 - Math.abs(screenCenter),
+      strength
+    };
+  }
 
+  function sampleRingVision(ring) {
+    const visual = sampleVisualObject(ring, RING_RADIUS, 2400);
+    const orientationVisibility = 0.76 + Math.abs(Math.cos(ring.angle)) * 0.24;
+    return {
+      left: clamp(visual.left * orientationVisibility, 0, 1),
+      right: clamp(visual.right * orientationVisibility, 0, 1),
+      center: visual.center,
+      strength: visual.strength * orientationVisibility
+    };
+  }
+
+  function selectAction(visualDifference) {
     const contextPreferences = preferences[neural.context];
+    const exploration = 0.42;
     let bestIndex = 0;
     let bestScore = -Infinity;
     ACTIONS.forEach((action, index) => {
-      const visualFit = -Math.abs(action - error) * 2;
-      const score = visualFit + contextPreferences[index] * 0.4;
+      const weakReflex = visualDifference * action * 0.12;
+      const score = contextPreferences[index] + weakReflex + sensoryNoise(exploration);
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     actionIndex = bestIndex;
+  }
+
+  function buildNeuralController(dt) {
+    const ring = rings[nextRingIndex] || rings[rings.length - 1];
+    const ringVision = sampleRingVision(ring);
+    neural.visualLeft = lerp(neural.visualLeft, ringVision.left, 1 - Math.exp(-dt * 12));
+    neural.visualRight = lerp(neural.visualRight, ringVision.right, 1 - Math.exp(-dt * 12));
+    const visualDifference = clamp(neural.visualRight - neural.visualLeft, -1, 1);
+    neural.context = clamp(Math.round(visualDifference * 2) + 2, 0, 4);
+
+    neural.decisionTimer -= dt;
+    if (neural.decisionTimer <= 0) {
+      selectAction(visualDifference);
+      neural.decisionTimer = 0.16 + randomUnit() * 0.14;
+    }
     eligibility = eligibility.map((value) => value * Math.exp(-dt * 2));
     eligibility[actionIndex] = Math.max(eligibility[actionIndex], 1);
-    neural.moveX = clamp(error * 0.72 + ACTIONS[actionIndex] * 0.28, -1, 1);
+
+    const actionDrive = ACTIONS[actionIndex] * 0.72;
+    neural.moveX = lerp(neural.moveX, clamp(actionDrive + visualDifference * 0.1 + sensoryNoise(0.035), -1, 1), 1 - Math.exp(-dt * 7));
+    neural.motorLeft = lerp(neural.motorLeft, Math.max(0, -neural.moveX), 1 - Math.exp(-dt * 9));
+    neural.motorRight = lerp(neural.motorRight, Math.max(0, neural.moveX), 1 - Math.exp(-dt * 9));
 
     neural.fireCooldown = Math.max(0, neural.fireCooldown - dt);
     const target = targets[nextTargetIndex];
     if (target && !target.hit && !target.missed) {
       const targetDepth = target.z - player.z;
-      const targetVisual = clamp(1 - Math.abs(target.x - player.x) / 110, 0, 1) * clamp(1 - Math.abs(targetDepth - 240) / 320, 0, 1);
+      const targetVision = sampleVisualObject(target, TARGET_HIT_RADIUS, 900);
+      const targetVisual = clamp(Math.min(targetVision.left, targetVision.right) * 2.1 * targetVision.center, 0, 1);
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
       if (targetVisual > 0.68 && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 430) fire();
     } else {
@@ -255,7 +305,13 @@
     if (p.depth < 90 || p.x < -300 || p.x > width + 300) return;
     ctx.strokeStyle = ring.result === "miss" ? COLORS.red : ring.result === "hit" ? COLORS.green : ring.color;
     ctx.lineWidth = clamp(18 * p.scale, 5, 22);
-    ctx.beginPath(); ctx.arc(p.x, p.y, RING_RADIUS * p.scale, 0, Math.PI * 2); ctx.stroke();
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(ring.angle);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RING_RADIUS * p.scale, RING_RADIUS * p.scale * 0.68, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawGameTarget(target) {
@@ -364,31 +420,47 @@
 
   function createFly() {
     const group = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.58, 14, 8), makeMaterial(0x20262b));
-    body.scale.set(0.85, 0.75, 1.55); group.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8), makeMaterial(0x303941));
-    head.position.z = 0.95; group.add(head);
-    const abdomen = new THREE.Mesh(new THREE.SphereGeometry(0.48, 12, 8), makeMaterial(0x6d4a28));
-    abdomen.scale.set(0.9, 0.9, 1.5); abdomen.position.z = -0.95; group.add(abdomen);
-    const eyeMaterial = makeMaterial(0xa62c2c);
-    [-1, 1].forEach((side) => { const eye = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), eyeMaterial); eye.position.set(side * 0.32, 0.12, 1.2); group.add(eye); });
-    const wingMaterial = new THREE.MeshStandardMaterial({ color: 0xb8d5df, transparent: true, opacity: 0.48, side: THREE.DoubleSide });
+    const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.62, 16, 10), makeMaterial(0x252b30));
+    thorax.scale.set(0.95, 0.9, 1.1); group.add(thorax);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.47, 16, 10), makeMaterial(0x39434a));
+    head.position.z = 1.0; group.add(head);
+    const abdomenMaterial = makeMaterial(0x664424);
+    [-0.55, -1.05, -1.52].forEach((z, index) => {
+      const abdomen = new THREE.Mesh(new THREE.SphereGeometry(0.5 - index * 0.045, 14, 9), abdomenMaterial);
+      abdomen.scale.set(0.94 - index * 0.08, 0.92 - index * 0.06, 0.72);
+      abdomen.position.z = z;
+      group.add(abdomen);
+      if (index < 2) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.47 - index * 0.04, 0.035, 6, 18), makeMaterial(0x171b1e));
+        band.rotation.x = Math.PI / 2; band.position.z = z - 0.22; group.add(band);
+      }
+    });
+    const eyeMaterial = makeMaterial(0xb83d45);
     [-1, 1].forEach((side) => {
-      const wing = new THREE.Mesh(new THREE.PlaneGeometry(1.45, 0.48), wingMaterial);
-      wing.position.set(side * 0.48, 0.3, -0.15); wing.rotation.set(side * 0.2, side * 0.25, side * 0.25); group.add(wing); three.wings.push(wing);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 7), eyeMaterial);
+      eye.scale.set(0.82, 1, 0.62); eye.position.set(side * 0.34, 0.14, 1.22); group.add(eye);
+      const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.58, 5), makeMaterial(0x111820));
+      antenna.position.set(side * 0.2, 0.48, 1.32); antenna.rotation.z = side * 0.3; antenna.rotation.x = -0.24; group.add(antenna);
+    });
+    const proboscis = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.07, 0.36, 6), makeMaterial(0x111820));
+    proboscis.position.set(0, -0.08, 1.46); proboscis.rotation.x = Math.PI / 2; group.add(proboscis);
+    const wingMaterial = new THREE.MeshStandardMaterial({ color: 0xaecbd4, transparent: true, opacity: 0.58, side: THREE.DoubleSide, roughness: 0.45 });
+    [-1, 1].forEach((side) => {
+      const wing = new THREE.Mesh(new THREE.PlaneGeometry(1.85, 0.62), wingMaterial);
+      wing.position.set(side * 0.62, 0.34, -0.2); wing.rotation.set(side * 0.2, side * 0.25, side * 0.28); group.add(wing); three.wings.push(wing);
     });
     const legMaterial = makeMaterial(0x111820);
     [-1, 1].forEach((side) => {
       const root = new THREE.Group(); root.position.set(side * 0.32, -0.18, 0.48); group.add(root);
-      root.add(cylinderBetween(new THREE.Vector3(0, 0, 0), new THREE.Vector3(side * 0.55, -0.25, 0.35), 0.045, legMaterial));
-      root.add(cylinderBetween(new THREE.Vector3(side * 0.55, -0.25, 0.35), new THREE.Vector3(side * 0.9, -0.5, 0.05), 0.035, legMaterial));
+      root.add(cylinderBetween(new THREE.Vector3(0, 0, 0), new THREE.Vector3(side * 0.58, -0.28, 0.4), 0.052, legMaterial));
+      root.add(cylinderBetween(new THREE.Vector3(side * 0.58, -0.28, 0.4), new THREE.Vector3(side * 1.0, -0.54, 0.1), 0.038, legMaterial));
       three.frontLegs.push(root);
     });
     [-1, 1].forEach((side) => {
-      for (let row = 0; row < 2; row += 1) {
+      for (let row = 0; row < 3; row += 1) {
         const root = new THREE.Group(); root.position.set(side * 0.32, -0.18, -0.15 - row * 0.55); group.add(root);
-        root.add(cylinderBetween(new THREE.Vector3(0, 0, 0), new THREE.Vector3(side * 0.55, -0.22, -0.08), 0.04, legMaterial));
-        root.add(cylinderBetween(new THREE.Vector3(side * 0.55, -0.22, -0.08), new THREE.Vector3(side * 0.95, -0.42, -0.2), 0.03, legMaterial));
+        root.add(cylinderBetween(new THREE.Vector3(0, 0, 0), new THREE.Vector3(side * 0.58, -0.22, -0.08), 0.043, legMaterial));
+        root.add(cylinderBetween(new THREE.Vector3(side * 0.58, -0.22, -0.08), new THREE.Vector3(side * (0.9 + row * 0.08), -0.45, -0.24), 0.032, legMaterial));
       }
     });
     return group;
@@ -402,19 +474,11 @@
     three.scene = new THREE.Scene();
     three.scene.fog = new THREE.Fog(0xd7e4e9, 18, 75);
     three.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 120);
-    three.camera.position.set(0, 2.4, 7);
-    three.camera.lookAt(0, 0, -22);
+    three.camera.position.set(3.2, 2.1, 6.8);
+    three.camera.lookAt(0, -0.05, 0);
     three.scene.add(new THREE.HemisphereLight(0xf4f1e8, 0x5a6c75, 2.1));
     const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(-4, 7, 6); three.scene.add(key);
-    three.fly = createFly(); three.fly.scale.setScalar(0.8); three.scene.add(three.fly);
-    for (const ring of rings) {
-      const mesh = new THREE.Mesh(new THREE.TorusGeometry(1.5, 0.09, 8, 36), makeMaterial(ring.color));
-      three.scene.add(mesh); three.ringMeshes.push(mesh);
-    }
-    for (const target of targets) {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.65, 0.16), makeMaterial(0x7c3aed));
-      three.scene.add(mesh); three.targetMeshes.push(mesh);
-    }
+    three.fly = createFly(); three.fly.scale.setScalar(1.05); three.scene.add(three.fly);
     resizeThree();
   }
 
@@ -428,24 +492,15 @@
 
   function updateThree() {
     if (!three.renderer) return;
-    const flyX = player.x / 100;
-    three.fly.position.set(flyX, -0.15, 0);
-    three.fly.rotation.z = -neural.moveX * 0.22;
-    three.fly.rotation.x = -neural.moveX * 0.05;
+    const flyX = player.x / 130;
+    three.fly.position.set(flyX, -0.15 + Math.sin(three.clock * 5) * 0.05, 0);
+    three.fly.rotation.z = -neural.moveX * 0.32;
+    three.fly.rotation.x = -neural.moveX * 0.08 + Math.sin(three.clock * 3.2) * 0.025;
+    three.fly.rotation.y = Math.sin(three.clock * 2.4) * 0.04;
     three.frontLegs.forEach((leg, index) => { leg.rotation.z = (index === 0 ? -1 : 1) * (0.12 + neural.frontLimb * 0.95); });
-    three.wings.forEach((wing, index) => { wing.rotation.y = (index === 0 ? -1 : 1) * (0.25 + Math.sin(three.clock * 20) * 0.08 + neural.frontLimb * 0.16); });
-    rings.forEach((ring, index) => {
-      const mesh = three.ringMeshes[index];
-      mesh.position.set(ring.x / 100, 0, -(ring.z - player.z) / 220);
-      mesh.rotation.x = Math.PI / 2;
-      mesh.visible = ring.z - player.z > -100 && ring.z - player.z < 13000;
-      mesh.material.color.set(ring.result === "hit" ? 0x1e6b49 : ring.color);
-    });
-    targets.forEach((target, index) => {
-      const mesh = three.targetMeshes[index];
-      mesh.position.set(target.x / 100, 0, -(target.z - player.z) / 220);
-      mesh.visible = !target.hit && target.z - player.z > -100 && target.z - player.z < 13000;
-      mesh.rotation.z += 0.01;
+    three.wings.forEach((wing, index) => {
+      wing.rotation.y = (index === 0 ? -1 : 1) * (0.25 + Math.sin(three.clock * 24) * 0.18 + neural.frontLimb * 0.16);
+      wing.rotation.z = (index === 0 ? -1 : 1) * (0.22 + Math.sin(three.clock * 24 + Math.PI / 2) * 0.05);
     });
     three.renderer.render(three.scene, three.camera);
   }
