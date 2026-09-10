@@ -1,7 +1,7 @@
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-
 (() => {
   "use strict";
+
+  let THREE = null;
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -395,7 +395,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
   }
 
   function initThree() {
-    three.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    three.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: "low-power" });
     three.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     three.renderer.setClearColor(0xd7e4e9, 1);
     flyView.appendChild(three.renderer.domElement);
@@ -450,6 +450,22 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
     three.renderer.render(three.scene, three.camera);
   }
 
+  function showThreeFallback() {
+    flyView.innerHTML = "<div class=\"fly-fallback\"><strong>3D preview unavailable</strong><span>The replay controls remain active. A WebGL-capable browser will show the Three.js fly here.</span></div>";
+  }
+
+  async function loadThree() {
+    try {
+      THREE = window.THREE;
+      if (!THREE) throw new Error("Three.js was not available");
+      initThree();
+      updateThree();
+    } catch (error) {
+      three.renderer = null;
+      showThreeFallback();
+    }
+  }
+
   function startEpisode() {
     if (running) return;
     if (player.z >= COURSE_LENGTH) resetEpisode();
@@ -478,9 +494,8 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.m
   ui.resetLearning.addEventListener("click", resetLearning);
 
   resizeGame();
-  initThree();
   resetEpisode();
   drawGame();
   syncUI();
-  updateThree();
+  loadThree();
 })();
