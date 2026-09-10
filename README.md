@@ -10,6 +10,7 @@ A bare-bones browser flight-course prototype for future neural-controller experi
 - Colored ring bands and visually separate target squares.
 - Wider spacing between course objects for easier first-pass play.
 - Center-locked crosshair with forward-only projectiles, target shatter feedback, and ring-color success pulses.
+- Projectiles spawn at the craft's front tip, stay in world space as the craft moves, and shrink with distance.
 - Keyboard and mouse controls.
 - No glow, no turning controls, and no connectome integration yet.
 - Static HTML, CSS, and JavaScript with no third-party dependencies.
@@ -22,6 +23,7 @@ A bare-bones browser flight-course prototype for future neural-controller experi
 - `Space`, `F`, or mouse click fires.
 - The craft always moves forward.
 - `Run again` resets the current level and starts a fresh course.
+- `Previous level` returns to level 1 when level 2 is active.
 
 ## Run locally
 

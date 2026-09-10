@@ -15,6 +15,7 @@
     cardCopy: document.getElementById("card-copy"),
     start: document.getElementById("start-button"),
     restart: document.getElementById("restart-button"),
+    previous: document.getElementById("previous-button"),
     next: document.getElementById("next-button"),
     controls: document.getElementById("control-description"),
     vertical: document.getElementById("vertical-control")
@@ -25,7 +26,9 @@
   const COURSE_LENGTH = 5200;
   const PLAYER_RADIUS = 42;
   const RING_RADIUS = 165;
+  const RING_CLEARANCE = 16;
   const TARGET_HIT_RADIUS = 82;
+  const MUZZLE_Y_OFFSET = 14;
   const keys = new Set();
   const mouse = { active: false, x: 0.5, y: 0.5 };
   let width = 1000;
@@ -81,6 +84,7 @@
     ui.cardTitle.textContent = `Level ${level}`;
     ui.cardCopy.textContent = level === 1 ? "Move left and right through five rings. Your craft always moves forward." : "Move left, right, up, and down through five rings. Shoot both targets.";
     ui.start.textContent = `Start level ${level}`;
+    ui.previous.disabled = level === 1;
     ui.next.disabled = true;
     ui.card.hidden = false;
     syncUI();
@@ -140,8 +144,8 @@
     if (!running || player.fireCooldown > 0) return;
     player.fireCooldown = 0.22;
     player.flash = 0.08;
-    // Projectiles inherit the ship's position and travel straight down the course.
-    bullets.push({ x: player.x, y: player.y, z: player.z + 50, speed: 920, life: 2.5 });
+    // Store the muzzle position once. The projectile keeps this world-space x/y while it advances in z.
+    bullets.push({ x: player.x, y: player.y + MUZZLE_Y_OFFSET, z: player.z + 50, speed: 920, life: 2.5 });
   }
 
   function getRingColor(ring) {
@@ -173,14 +177,14 @@
         }
       }
     }
-    bullets = bullets.filter((bullet) => bullet.life > 0 && bullet.z < player.z + 900);
+    bullets = bullets.filter((bullet) => bullet.life > 0);
   }
 
   function updateCourse() {
     for (const ring of rings) {
       if (!ring.passed && player.z >= ring.z) {
         ring.passed = true;
-        ring.result = Math.hypot(player.x - ring.x, player.y - ring.y) <= RING_RADIUS - PLAYER_RADIUS ? "hit" : "miss";
+        ring.result = Math.hypot(player.x - ring.x, player.y - ring.y) <= RING_RADIUS - RING_CLEARANCE ? "hit" : "miss";
         announcement = ring.result === "hit" ? "RING CLEARED" : "RING MISSED";
         if (ring.result === "hit") {
           particles.push({ x: ring.x, y: ring.y, z: ring.z, life: 0.35, color: getRingColor(ring) });
@@ -251,14 +255,16 @@
       const p = project(bullet.x, bullet.y, bullet.z);
       const tail = project(bullet.x, bullet.y, bullet.z - 100);
       if (p.depth > 0 && p.depth < 1800) {
+        const depthScale = clamp(p.scale / 3.5, 0.16, 1);
         ctx.strokeStyle = COLORS.ink;
-        ctx.lineWidth = 8;
+        ctx.lineWidth = clamp(8 * depthScale, 2, 8);
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
         ctx.strokeStyle = "#e24b2d";
-        ctx.lineWidth = 4;
+        ctx.lineWidth = clamp(4 * depthScale, 1, 4);
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
         ctx.fillStyle = COLORS.paper;
-        ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+        const headSize = clamp(8 * depthScale, 2, 8);
+        ctx.fillRect(p.x - headSize / 2, p.y - headSize / 2, headSize, headSize);
       }
     }
     ctx.lineCap = "butt";
@@ -266,7 +272,7 @@
 
   function drawPlayer() {
     const x = width / 2;
-    const y = height / 2;
+    const y = height / 2 + 72;
     ctx.save();
     ctx.translate(x, y);
     ctx.fillStyle = COLORS.paper;
@@ -384,6 +390,7 @@
   canvas.addEventListener("pointerdown", (event) => { pointerPosition(event); fire(); });
   ui.start.addEventListener("click", () => { resetGame(level); startGame(); });
   ui.restart.addEventListener("click", () => resetGame(level));
+  ui.previous.addEventListener("click", () => { if (level > 1) { resetGame(level - 1); startGame(); } });
   ui.next.addEventListener("click", () => { if (level === 1 && completed) { resetGame(2); startGame(); } });
 
   resize();
