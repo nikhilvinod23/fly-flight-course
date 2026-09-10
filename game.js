@@ -21,6 +21,7 @@
   };
 
   const COLORS = { ink: "#111820", blue: "#005c9e", red: "#a62c2c", green: "#1e6b49", paper: "#f4f1e8", sky: "#d7e4e9", grid: "#9db5bd" };
+  const RING_COLORS = ["#216eaa", "#c26718", "#2f7d55", "#7548a8", "#a53463"];
   const COURSE_LENGTH = 5200;
   const PLAYER_RADIUS = 42;
   const RING_RADIUS = 165;
@@ -38,6 +39,8 @@
   let targets;
   let bullets;
   let particles;
+  let explosions;
+  let screenPulse;
   let announcement = "PRESS START";
 
   function resize() {
@@ -66,6 +69,8 @@
     player = { x: 0, y: 0, z: 0, speed: 360, fireCooldown: 0, flash: 0 };
     bullets = [];
     particles = [];
+    explosions = [];
+    screenPulse = { color: COLORS.blue, remaining: 0, duration: 0.42 };
     completed = false;
     running = false;
     announcement = "PRESS START";
@@ -135,7 +140,26 @@
     if (!running || player.fireCooldown > 0) return;
     player.fireCooldown = 0.22;
     player.flash = 0.08;
+    // Projectiles inherit the ship's position and travel straight down the course.
     bullets.push({ x: player.x, y: player.y, z: player.z + 50, speed: 920, life: 2.5 });
+  }
+
+  function getRingColor(ring) {
+    return RING_COLORS[Math.round(ring.z / 900) % RING_COLORS.length];
+  }
+
+  function spawnExplosion(target) {
+    explosions.push({
+      x: target.x,
+      y: target.y,
+      z: target.z,
+      life: 0.68,
+      duration: 0.68,
+      shards: Array.from({ length: 8 }, (_, index) => ({
+        angle: (Math.PI * 2 * index) / 8,
+        length: 0.7 + (index % 3) * 0.18
+      }))
+    });
   }
 
   function updateBullets(dt) {
@@ -145,7 +169,7 @@
       for (const target of targets) {
         if (!target.hit && !target.missed && Math.abs(bullet.z - target.z) < 55 && Math.hypot(bullet.x - target.x, bullet.y - target.y) < TARGET_HIT_RADIUS) {
           target.hit = true;
-          particles.push({ x: target.x, y: target.y, z: target.z, life: 0.3, color: COLORS.green });
+          spawnExplosion(target);
         }
       }
     }
@@ -158,7 +182,10 @@
         ring.passed = true;
         ring.result = Math.hypot(player.x - ring.x, player.y - ring.y) <= RING_RADIUS - PLAYER_RADIUS ? "hit" : "miss";
         announcement = ring.result === "hit" ? "RING CLEARED" : "RING MISSED";
-        if (ring.result === "hit") particles.push({ x: ring.x, y: ring.y, z: ring.z, life: 0.35, color: COLORS.blue });
+        if (ring.result === "hit") {
+          particles.push({ x: ring.x, y: ring.y, z: ring.z, life: 0.35, color: getRingColor(ring) });
+          screenPulse = { color: getRingColor(ring), remaining: 0.42, duration: 0.42 };
+        }
       }
     }
     for (const target of targets) {
@@ -167,7 +194,13 @@
     if (player.z > COURSE_LENGTH) finishGame(rings.every((ring) => ring.result === "hit") && targets.every((target) => target.hit));
   }
 
-  function updateParticles(dt) { for (const item of particles) item.life -= dt; particles = particles.filter((item) => item.life > 0); }
+  function updateParticles(dt) {
+    for (const item of particles) item.life -= dt;
+    particles = particles.filter((item) => item.life > 0);
+    for (const explosion of explosions) explosion.life -= dt;
+    explosions = explosions.filter((explosion) => explosion.life > 0);
+    screenPulse.remaining = Math.max(0, screenPulse.remaining - dt);
+  }
 
   function project(x, y, z) {
     const depth = z - player.z;
@@ -194,17 +227,17 @@
     const p = project(ring.x, ring.y, ring.z);
     if (p.depth < 90 || p.x < -300 || p.x > width + 300 || p.y < -300 || p.y > height + 300) return;
     const radius = RING_RADIUS * p.scale;
-    const ringColors = ["#216eaa", "#c26718", "#2f7d55", "#7548a8", "#a53463"];
-    ctx.strokeStyle = ring.result === "miss" ? COLORS.red : ring.result === "hit" ? COLORS.green : ringColors[Math.round(ring.z / 900) % ringColors.length];
+    ctx.strokeStyle = ring.result === "miss" ? COLORS.red : ring.result === "hit" ? COLORS.green : getRingColor(ring);
     ctx.lineWidth = clamp(18 * p.scale, 5, 22);
     ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.stroke();
   }
 
   function drawTarget(target) {
+    if (target.hit) return;
     const p = project(target.x, target.y, target.z);
     if (p.depth < 90 || p.x < -100 || p.x > width + 100 || p.y < -100 || p.y > height + 100) return;
     const size = clamp(48 * p.scale, 12, 100);
-    ctx.fillStyle = target.hit ? COLORS.green : target.missed ? COLORS.red : "#7c3aed";
+    ctx.fillStyle = target.missed ? COLORS.red : "#7c3aed";
     ctx.strokeStyle = COLORS.ink;
     ctx.lineWidth = clamp(2 * p.scale, 1.5, 4);
     ctx.fillRect(p.x - size, p.y - size, size * 2, size * 2);
@@ -213,13 +246,22 @@
   }
 
   function drawBullets() {
-    ctx.strokeStyle = COLORS.red;
-    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
     for (const bullet of bullets) {
       const p = project(bullet.x, bullet.y, bullet.z);
       const tail = project(bullet.x, bullet.y, bullet.z - 100);
-      if (p.depth > 0 && p.depth < 1800) { ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke(); }
+      if (p.depth > 0 && p.depth < 1800) {
+        ctx.strokeStyle = COLORS.ink;
+        ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
+        ctx.strokeStyle = "#e24b2d";
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
+        ctx.fillStyle = COLORS.paper;
+        ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+      }
     }
+    ctx.lineCap = "butt";
   }
 
   function drawPlayer() {
@@ -235,6 +277,20 @@
     ctx.restore();
   }
 
+  function drawCrosshair() {
+    const x = width / 2;
+    const y = height / 2;
+    ctx.strokeStyle = COLORS.ink;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 15, y); ctx.lineTo(x - 5, y);
+    ctx.moveTo(x + 5, y); ctx.lineTo(x + 15, y);
+    ctx.moveTo(x, y - 15); ctx.lineTo(x, y - 5);
+    ctx.moveTo(x, y + 5); ctx.lineTo(x, y + 15);
+    ctx.stroke();
+    ctx.strokeRect(x - 4, y - 4, 8, 8);
+  }
+
   function drawParticles() {
     for (const item of particles) {
       const p = project(item.x, item.y, item.z);
@@ -247,13 +303,52 @@
     }
   }
 
+  function drawExplosions() {
+    for (const explosion of explosions) {
+      const p = project(explosion.x, explosion.y, explosion.z);
+      const progress = 1 - explosion.life / explosion.duration;
+      const alpha = clamp(explosion.life / explosion.duration, 0, 1);
+      const startRadius = 8 * p.scale;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = COLORS.red;
+      ctx.lineWidth = clamp(5 * p.scale, 2, 7);
+      for (const shard of explosion.shards) {
+        const start = startRadius + progress * 8 * p.scale;
+        const end = start + (24 + 18 * shard.length) * progress * p.scale;
+        ctx.beginPath();
+        ctx.moveTo(p.x + Math.cos(shard.angle) * start, p.y + Math.sin(shard.angle) * start);
+        ctx.lineTo(p.x + Math.cos(shard.angle) * end, p.y + Math.sin(shard.angle) * end);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#7c3aed";
+      const size = Math.max(4, (18 - progress * 12) * p.scale);
+      ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+      ctx.restore();
+    }
+  }
+
+  function drawScreenPulse() {
+    if (screenPulse.remaining <= 0) return;
+    const strength = screenPulse.remaining / screenPulse.duration;
+    ctx.save();
+    ctx.globalAlpha = strength * 0.9;
+    ctx.strokeStyle = screenPulse.color;
+    ctx.lineWidth = 4 + strength * 7;
+    ctx.strokeRect(6, 6, width - 12, height - 12);
+    ctx.restore();
+  }
+
   function draw() {
     drawBackground();
     [...rings].sort((a, b) => b.z - a.z).forEach(drawRing);
     [...targets].sort((a, b) => b.z - a.z).forEach(drawTarget);
     drawBullets();
     drawParticles();
+    drawExplosions();
     drawPlayer();
+    drawCrosshair();
+    drawScreenPulse();
   }
 
   function loop(now) {
