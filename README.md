@@ -7,6 +7,8 @@ A bare-bones browser flight-course prototype for future neural-controller experi
 - Level 1: automatic forward motion with left/right movement only.
 - Level 2: automatic forward motion with left/right/up/down movement.
 - Five rings and two square targets per level.
+- Colored ring bands and visually separate target squares.
+- Wider spacing between course objects for easier first-pass play.
 - Keyboard and mouse controls.
 - No glow, no turning controls, and no connectome integration yet.
 - Static HTML, CSS, and JavaScript with no third-party dependencies.
@@ -17,6 +19,7 @@ A bare-bones browser flight-course prototype for future neural-controller experi
 - Mouse position moves the craft.
 - `Space`, `F`, or mouse click fires.
 - The craft always moves forward.
+- `Run again` resets the current level and starts a fresh course.
 
 ## Run locally
 

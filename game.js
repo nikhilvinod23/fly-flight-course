@@ -21,9 +21,10 @@
   };
 
   const COLORS = { ink: "#111820", blue: "#005c9e", red: "#a62c2c", green: "#1e6b49", paper: "#f4f1e8", sky: "#d7e4e9", grid: "#9db5bd" };
-  const COURSE_LENGTH = 4300;
+  const COURSE_LENGTH = 5200;
   const PLAYER_RADIUS = 42;
-  const RING_RADIUS = 130;
+  const RING_RADIUS = 165;
+  const TARGET_HIT_RADIUS = 82;
   const keys = new Set();
   const mouse = { active: false, x: 0.5, y: 0.5 };
   let width = 1000;
@@ -50,12 +51,14 @@
   }
 
   function buildCourse(whichLevel) {
-    const lateral = whichLevel === 1 ? [-115, 110, -75, 135, -25] : [-130, 100, -105, 125, 0];
-    const vertical = whichLevel === 1 ? [0, 0, 0, 0, 0] : [80, -75, 100, -55, 0];
-    rings = lateral.map((x, index) => ({ x, y: vertical[index], z: 650 + index * 700, passed: false, result: null }));
-    const targetX = whichLevel === 1 ? [-70, 95] : [-90, 90];
-    const targetY = whichLevel === 1 ? [0, 0] : [65, -60];
-    targets = targetX.map((x, index) => ({ x, y: targetY[index], z: 1160 + index * 1650, hit: false, missed: false }));
+    const lateral = whichLevel === 1 ? [-105, 105, -85, 115, -35] : [-115, 100, -95, 115, 0];
+    const vertical = whichLevel === 1 ? [0, 0, 0, 0, 0] : [65, -60, 85, -50, 0];
+    // Wide gaps leave time to line up with the next ring or target.
+    rings = lateral.map((x, index) => ({ x, y: vertical[index], z: 800 + index * 900, passed: false, result: null }));
+    const targetX = whichLevel === 1 ? [-65, 75] : [-70, 70];
+    const targetY = whichLevel === 1 ? [0, 0] : [45, -45];
+    // Targets occupy their own depth layer between rings rather than sharing a gate plane.
+    targets = targetX.map((x, index) => ({ x, y: targetY[index], z: 1250 + index * 1800, hit: false, missed: false }));
   }
 
   function resetGame(whichLevel = level) {
@@ -140,7 +143,7 @@
       bullet.z += bullet.speed * dt;
       bullet.life -= dt;
       for (const target of targets) {
-        if (!target.hit && !target.missed && Math.abs(bullet.z - target.z) < 45 && Math.hypot(bullet.x - target.x, bullet.y - target.y) < 54) {
+        if (!target.hit && !target.missed && Math.abs(bullet.z - target.z) < 55 && Math.hypot(bullet.x - target.x, bullet.y - target.y) < TARGET_HIT_RADIUS) {
           target.hit = true;
           particles.push({ x: target.x, y: target.y, z: target.z, life: 0.3, color: COLORS.green });
         }
@@ -191,19 +194,20 @@
     const p = project(ring.x, ring.y, ring.z);
     if (p.depth < 90 || p.x < -300 || p.x > width + 300 || p.y < -300 || p.y > height + 300) return;
     const radius = RING_RADIUS * p.scale;
-    ctx.strokeStyle = ring.result === "miss" ? COLORS.red : ring.result === "hit" ? COLORS.green : COLORS.ink;
-    ctx.lineWidth = clamp(3.5 * p.scale, 1.5, 8);
+    const ringColors = ["#216eaa", "#c26718", "#2f7d55", "#7548a8", "#a53463"];
+    ctx.strokeStyle = ring.result === "miss" ? COLORS.red : ring.result === "hit" ? COLORS.green : ringColors[Math.round(ring.z / 900) % ringColors.length];
+    ctx.lineWidth = clamp(18 * p.scale, 5, 22);
     ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.stroke();
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(p.x, p.y, radius * 0.82, 0, Math.PI * 2); ctx.stroke();
   }
 
   function drawTarget(target) {
     const p = project(target.x, target.y, target.z);
     if (p.depth < 90 || p.x < -100 || p.x > width + 100 || p.y < -100 || p.y > height + 100) return;
-    const size = clamp(36 * p.scale, 8, 80);
-    ctx.strokeStyle = target.hit ? COLORS.green : target.missed ? COLORS.red : COLORS.ink;
-    ctx.lineWidth = clamp(3 * p.scale, 1.5, 6);
+    const size = clamp(48 * p.scale, 12, 100);
+    ctx.fillStyle = target.hit ? COLORS.green : target.missed ? COLORS.red : "#7c3aed";
+    ctx.strokeStyle = COLORS.ink;
+    ctx.lineWidth = clamp(2 * p.scale, 1.5, 4);
+    ctx.fillRect(p.x - size, p.y - size, size * 2, size * 2);
     ctx.strokeRect(p.x - size, p.y - size, size * 2, size * 2);
     ctx.beginPath(); ctx.moveTo(p.x - size * 1.3, p.y); ctx.lineTo(p.x + size * 1.3, p.y); ctx.moveTo(p.x, p.y - size * 1.3); ctx.lineTo(p.x, p.y + size * 1.3); ctx.stroke();
   }
@@ -283,7 +287,7 @@
   canvas.addEventListener("pointermove", pointerPosition);
   canvas.addEventListener("pointerleave", () => { mouse.active = false; });
   canvas.addEventListener("pointerdown", (event) => { pointerPosition(event); fire(); });
-  ui.start.addEventListener("click", startGame);
+  ui.start.addEventListener("click", () => { resetGame(level); startGame(); });
   ui.restart.addEventListener("click", () => resetGame(level));
   ui.next.addEventListener("click", () => { if (level === 1 && completed) { resetGame(2); startGame(); } });
 
