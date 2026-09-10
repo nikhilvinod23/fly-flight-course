@@ -1,0 +1,20 @@
+.dual-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin: 1rem 0; }
+.panel { min-width: 0; border: 2px solid var(--ink); background: var(--panel); }
+.panel-heading { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.75rem; border-bottom: 2px solid var(--ink); color: var(--muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; }
+.game-panel .game-frame { margin: 0; border: 0; }
+.game-panel canvas { height: min(58vh, 580px); min-height: 420px; }
+.fly-view { height: min(58vh, 580px); min-height: 420px; background: #d7e4e9; }
+.fly-view canvas { width: 100%; height: 100%; display: block; }
+.neural-readout { padding: 0.75rem; border-top: 2px solid var(--ink); background: var(--paper); }
+.readout-heading { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.55rem; color: var(--muted); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; }
+.neuron-row { display: grid; grid-template-columns: 5.7rem 1fr; align-items: center; gap: 0.5rem; margin: 0.3rem 0; color: var(--muted); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; }
+.neuron-track { height: 0.55rem; background: #d7d2c7; }
+.neuron-track i { display: block; width: 0%; height: 100%; background: var(--blue); transition: width 80ms linear; }
+.limb-track i { background: #7c3aed; }
+.dopamine-track i { background: var(--green); }
+.neural-readout p { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.78rem; }
+
+@media (max-width: 900px) {
+  .dual-view { grid-template-columns: 1fr; }
+  .game-panel canvas, .fly-view { height: 58vh; min-height: 360px; }
+}

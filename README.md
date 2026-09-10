@@ -44,3 +44,7 @@ The connectome should eventually replace the keyboard/mouse input path while the
 ## Static replay branch
 
 The `static-replay-v1` branch contains a self-contained Level 1 scripted replay at `replay.html`. It has no neural model or server dependency and is intended as the first reviewable public viewer before adding GitHub Pages hosting.
+
+## Neural replay branch
+
+The `neural-replay-v1` branch adds `neural-replay.html`, a Level 1 browser prototype with ten rings, a Three.js fly-body panel, visible activity readouts, and a small dopamine-style reward-modulated preference table. It is an educational controller scaffold, not a full biological connectome simulation.
