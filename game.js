@@ -57,7 +57,7 @@
   }
 
   function buildCourse(whichLevel) {
-    const lateral = whichLevel === 1 ? [-105, 105, -85, 115, -35] : [-115, 100, -95, 115, 0];
+    const lateral = whichLevel === 1 ? [-200, 180, -170, 210, -160] : [-115, 100, -95, 115, 0];
     const vertical = whichLevel === 1 ? [0, 0, 0, 0, 0] : [65, -60, 85, -50, 0];
     // Wide gaps leave time to line up with the next ring or target.
     rings = lateral.map((x, index) => ({ x, y: vertical[index], z: 800 + index * 900, passed: false, result: null }));
@@ -173,7 +173,9 @@
       for (const target of targets) {
         if (!target.hit && !target.missed && Math.abs(bullet.z - target.z) < 55 && Math.hypot(bullet.x - target.x, bullet.y - target.y) < TARGET_HIT_RADIUS) {
           target.hit = true;
+          bullet.life = 0;
           spawnExplosion(target);
+          break;
         }
       }
     }
