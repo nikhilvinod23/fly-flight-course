@@ -1,0 +1,18 @@
+.replay-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.replay-bar input { width: 100%; accent-color: var(--blue); }
+.replay-bar output { min-width: 3.5rem; color: var(--ink); text-align: right; }
+
+@media (max-width: 600px) {
+  .replay-bar { grid-template-columns: 1fr auto; }
+  .replay-bar input { grid-column: 1 / -1; grid-row: 2; }
+}

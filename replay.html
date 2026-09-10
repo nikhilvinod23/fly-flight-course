@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Static Level 1 replay for the Forward Course project." />
+    <title>Forward Course · Static Replay v1</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="replay.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">FORWARD COURSE / STATIC REPLAY</p>
+          <h1>Level 1 Replay</h1>
+        </div>
+        <div class="status-cluster" aria-live="polite">
+          <span>VERSION 1 · SCRIPTED RUN</span>
+          <span id="status-label">READY</span>
+        </div>
+      </header>
+
+      <section class="game-frame" aria-label="Static Level 1 replay">
+        <canvas id="replay" aria-label="Static replay canvas"></canvas>
+        <div class="canvas-hud hud-top-left">
+          <span>RINGS <strong id="rings-count">0 / 5</strong></span>
+          <span>TARGETS <strong id="targets-count">0 / 2</strong></span>
+        </div>
+        <div class="canvas-hud hud-top-right">
+          <span>SPEED <strong>1.0×</strong></span>
+          <span id="message-label">REPLAY READY</span>
+        </div>
+        <div id="start-card" class="start-card">
+          <p class="eyebrow">STATIC REPLAY V1</p>
+          <h2>Level 1 course run</h2>
+          <p>This is a deterministic scripted replay. Neural control is not connected yet.</p>
+          <button id="play-button" type="button">Play replay</button>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <div class="control-copy">
+          <h2>Replay viewer</h2>
+          <p>Watch the craft align with five lateral rings and fire at both targets.</p>
+        </div>
+        <div class="control-list" aria-label="Replay information">
+          <span>Human input disabled</span>
+          <span>Recorded actions are deterministic</span>
+          <span>No neural model attached</span>
+        </div>
+        <div class="button-row">
+          <button id="play-control" type="button">Play</button>
+          <button id="restart-button" class="secondary" type="button">Restart</button>
+        </div>
+      </section>
+
+      <div class="replay-bar">
+        <label for="timeline">REPLAY POSITION</label>
+        <input id="timeline" type="range" min="0" max="1" step="0.01" value="0" />
+        <output id="time-label" for="timeline">0.0 s</output>
+      </div>
+
+      <footer>
+        <span>Static replay · Level 1 · no connectome attached</span>
+        <span>Replay v1</span>
+      </footer>
+    </main>
+    <script src="replay.js"></script>
+  </body>
+</html>

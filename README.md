@@ -40,3 +40,7 @@ The game intentionally keeps the control surface small:
 - visual input: the rendered canvas frame
 
 The connectome should eventually replace the keyboard/mouse input path while the course and scoring rules remain unchanged.
+
+## Static replay branch
+
+The `static-replay-v1` branch contains a self-contained Level 1 scripted replay at `replay.html`. It has no neural model or server dependency and is intended as the first reviewable public viewer before adding GitHub Pages hosting.
