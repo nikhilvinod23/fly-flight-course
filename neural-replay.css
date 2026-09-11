@@ -1,3 +1,10 @@
+.pipeline-strip { display: grid; grid-template-columns: repeat(5, minmax(118px, 1fr)); overflow-x: auto; border: 2px solid var(--ink); background: var(--paper); }
+.pipeline-strip > div { min-width: 0; padding: 0.65rem 0.7rem; border-right: 1px solid var(--ink); }
+.pipeline-strip > div:last-child { border-right: 0; }
+.pipeline-strip span, .pipeline-strip strong, .pipeline-strip small { display: block; }
+.pipeline-strip span { margin-bottom: 0.25rem; color: var(--blue); font-size: 0.65rem; font-weight: 900; letter-spacing: 0.08em; }
+.pipeline-strip strong { color: var(--ink); font-size: 0.68rem; letter-spacing: 0.06em; }
+.pipeline-strip small { margin-top: 0.18rem; color: var(--muted); font-size: 0.68rem; line-height: 1.25; }
 .dual-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin: 1rem 0; }
 .panel { min-width: 0; border: 2px solid var(--ink); background: var(--panel); }
 .panel-heading { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.75rem; border-bottom: 2px solid var(--ink); color: var(--muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; }
@@ -17,6 +24,7 @@
 .neuron-row { display: grid; grid-template-columns: 5.7rem 1fr; align-items: center; gap: 0.5rem; margin: 0.3rem 0; color: var(--muted); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; }
 .neuron-track { height: 0.55rem; background: #d7d2c7; }
 .neuron-track i { display: block; width: 0%; height: 100%; background: var(--blue); transition: width 80ms linear; }
+.spontaneous-track i { background: #c26718; }
 .limb-track i { background: #7c3aed; }
 .dopamine-track i { background: var(--green); }
 .neural-readout p { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.78rem; }

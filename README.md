@@ -47,4 +47,6 @@ The `static-replay-v1` branch contains a self-contained Level 1 scripted replay 
 
 ## Neural replay branch
 
-The `neural-replay-v1` branch adds `neural-replay.html`, a Level 1 browser prototype with ten rings, a Three.js fly-body panel, visible activity readouts, and a small dopamine-style reward-modulated preference table. It is an educational controller scaffold, not a full biological connectome simulation.
+The `neural-replay-v1` branch adds `neural-replay.html`, a Level 1 closed-loop browser prototype with ten rings, a 48 × 27 camera-to-retina view, visible visual/motor/spontaneous activity, dopamine-style reward-modulated preferences, and a Three.js fly-motion panel.
+
+The controller reads only the downsampled rendered image for steering and firing; game coordinates are retained for collision and reward bookkeeping. The retinal salience channels, action-selection circuit, and body animation remain educational approximations rather than validated predictions from the full fly connectome.

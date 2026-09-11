@@ -25,6 +25,7 @@
     visualRight: document.getElementById("visual-right"),
     motorLeft: document.getElementById("motor-left"),
     motorRight: document.getElementById("motor-right"),
+    spontaneous: document.getElementById("spontaneous-drive"),
     frontLimb: document.getElementById("front-limb"),
     dopamine: document.getElementById("dopamine")
   };
@@ -78,7 +79,10 @@
     moveX: 0,
     context: 2,
     fireCooldown: 0,
-    decisionTimer: 0
+    decisionTimer: 0,
+    noiseTimer: 0,
+    spontaneousDrive: 0,
+    turnBias: 0
   };
 
   const three = {
@@ -111,6 +115,9 @@
     rewardFlash = 0;
     neural.fireCooldown = 0;
     neural.decisionTimer = 0;
+    neural.noiseTimer = 0;
+    neural.spontaneousDrive = 0;
+    neural.turnBias = 0;
     sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
     previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
     rings.forEach((ring) => { ring.result = null; });
@@ -186,12 +193,14 @@
 
   function selectAction(visualDifference) {
     const contextPreferences = preferences[neural.context];
-    const exploration = 0.42;
+    const exploration = 0.58;
     let bestIndex = 0;
     let bestScore = -Infinity;
     ACTIONS.forEach((action, index) => {
       const weakReflex = visualDifference * action * 0.12;
-      const score = contextPreferences[index] + weakReflex + sensoryNoise(exploration);
+      const spontaneousBias = neural.spontaneousDrive * action * 0.22;
+      const adaptation = -neural.turnBias * action * 0.26;
+      const score = contextPreferences[index] + weakReflex + spontaneousBias + adaptation + sensoryNoise(exploration);
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     actionIndex = bestIndex;
@@ -204,6 +213,13 @@
     const visualDifference = clamp(neural.visualRight - neural.visualLeft, -1, 1);
     neural.context = clamp(Math.round(visualDifference * 2) + 2, 0, 4);
 
+    neural.noiseTimer -= dt;
+    if (neural.noiseTimer <= 0) {
+      neural.spontaneousDrive = sensoryNoise(1);
+      neural.noiseTimer = 0.22 + randomUnit() * 0.34;
+    }
+    neural.turnBias = lerp(neural.turnBias, neural.moveX, 1 - Math.exp(-dt * 0.65));
+
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
       selectAction(visualDifference);
@@ -212,8 +228,9 @@
     eligibility = eligibility.map((value) => value * Math.exp(-dt * 2));
     eligibility[actionIndex] = Math.max(eligibility[actionIndex], 1);
 
-    const actionDrive = ACTIONS[actionIndex] * 0.72;
-    neural.moveX = lerp(neural.moveX, clamp(actionDrive + visualDifference * 0.1 + sensoryNoise(0.035), -1, 1), 1 - Math.exp(-dt * 7));
+    const actionDrive = ACTIONS[actionIndex] * 0.62;
+    const motorTarget = actionDrive + visualDifference * 0.08 + neural.spontaneousDrive * 0.3 - neural.turnBias * 0.2;
+    neural.moveX = lerp(neural.moveX, clamp(motorTarget + sensoryNoise(0.045), -1, 1), 1 - Math.exp(-dt * 5.5));
     neural.motorLeft = lerp(neural.motorLeft, Math.max(0, -neural.moveX), 1 - Math.exp(-dt * 9));
     neural.motorRight = lerp(neural.motorRight, Math.max(0, neural.moveX), 1 - Math.exp(-dt * 9));
 
@@ -421,6 +438,7 @@
     ui.reward.textContent = `REWARD ${lastReward.toFixed(2)}`;
     setBar(ui.visualLeft, neural.visualLeft); setBar(ui.visualRight, neural.visualRight);
     setBar(ui.motorLeft, neural.motorLeft); setBar(ui.motorRight, neural.motorRight);
+    setBar(ui.spontaneous, Math.abs(neural.spontaneousDrive));
     setBar(ui.frontLimb, neural.frontLimb); setBar(ui.dopamine, neural.dopamine);
   }
 
@@ -508,16 +526,18 @@
 
   function updateThree() {
     if (!three.renderer) return;
-    const flyX = player.x / 130;
+    const flyX = player.x / 155 + neural.moveX * 0.55;
     three.fly.position.set(flyX, -0.15 + Math.sin(three.clock * 5) * 0.05, 0);
     // Local +X is the fly's right; positive game movement is screen-right.
     // Keep the visible roll on the same side as the fly's own turn.
-    three.fly.rotation.z = neural.moveX * 0.32;
+    three.fly.rotation.z = neural.moveX * 0.38;
     three.fly.rotation.x = -neural.moveX * 0.08 + Math.sin(three.clock * 3.2) * 0.025;
     three.fly.rotation.y = Math.sin(three.clock * 2.4) * 0.04;
     three.frontLegs.forEach((leg, index) => { leg.rotation.z = (index === 0 ? -1 : 1) * (0.12 + neural.frontLimb * 0.95); });
     three.wings.forEach((wing, index) => {
-      wing.rotation.y = (index === 0 ? -1 : 1) * (0.25 + Math.sin(three.clock * 24) * 0.18 + neural.frontLimb * 0.16);
+      const side = index === 0 ? -1 : 1;
+      const turnLift = 1 + side * neural.moveX * 0.35;
+      wing.rotation.y = side * (0.25 + Math.sin(three.clock * 24) * 0.18 * turnLift + neural.frontLimb * 0.16);
       wing.rotation.z = (index === 0 ? -1 : 1) * (0.22 + Math.sin(three.clock * 24 + Math.PI / 2) * 0.05);
     });
     three.renderer.render(three.scene, three.camera);
