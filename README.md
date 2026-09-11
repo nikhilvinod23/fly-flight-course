@@ -55,7 +55,7 @@ The 3D panel uses the simplified NeuroMechFly v2 mesh and rigging assets vendore
 
 ## GitHub Pages
 
-The `neural-replay-v1` branch includes a GitHub Actions Pages deployment workflow. Once the workflow finishes, the replay is available at:
+The repository's GitHub Pages source is the root of the `neural-replay-v1` branch. GitHub publishes updates to that branch automatically. The replay is available at:
 
 `https://nikhilvinod23.github.io/fly-flight-course/neural-replay.html`
 
