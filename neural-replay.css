@@ -109,7 +109,9 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .graph-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .graph-legend i { width: 0.5rem; height: 0.5rem; border-radius: 50%; }
 .graph-rings { background: var(--green); }
+.graph-rings-average { width: 0.8rem !important; height: 2px !important; border-radius: 0 !important; background: #b4f3ca; }
 .graph-shots { background: var(--amber); }
+.graph-shots-average { width: 0.8rem !important; height: 2px !important; border-radius: 0 !important; background: #ffd27b; }
 footer a { color: var(--blue); text-decoration: underline; text-underline-offset: 0.18em; }
 footer a:hover, footer a:focus-visible { color: var(--ink); }
 

@@ -40,16 +40,22 @@
   const TARGET_HIT_RADIUS = 82;
   const BULLET_SPEED = 920;
   const RING_SPACING = 650;
-  const LEARNING_RATE = 0.24;
-  const ACTION_NOISE = 0.18;
+  const LEARNING_RATE = 0.16;
+  const ACTION_NOISE_START = 0.24;
+  const ACTION_NOISE_FLOOR = 0.05;
+  const EXPLORATION_DECAY = 180;
+  const CONTEXT_BINS = 9;
   const ELIGIBILITY_DECAY = 0.42;
   const BASELINE_MIX = 0.08;
-  const RING_SUCCESS_REWARD = 1.2;
-  const RING_MISS_REWARD = -0.9;
-  const TARGET_REWARD = 0.22;
-  const FAST_FORWARD_DT = 1 / 30;
-  const FAST_FORWARD_CHUNK = 60;
+  const PROGRESS_REWARD_SCALE = 0.65;
+  const RING_SUCCESS_REWARD = 1.4;
+  const RING_MISS_REWARD = -0.75;
+  const TARGET_REWARD = 0.5;
+  const TARGET_MISS_REWARD = -0.18;
+  const FAST_FORWARD_DT = 1 / 20;
+  const FAST_FORWARD_CHUNK = 80;
   const MAX_RECENT_EPISODES = 10;
+  const MOVING_AVERAGE_WINDOW = 10;
   const MAX_STORED_EPISODES = 500;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
@@ -82,8 +88,8 @@
   let rewardColor = COLORS.green;
   let actionXIndex = 2;
   let actionYIndex = 2;
-  let preferencesX = ACTIONS.map(() => ACTIONS.map(() => 0));
-  let preferencesY = ACTIONS.map(() => ACTIONS.map(() => 0));
+  let preferencesX = freshPreferences();
+  let preferencesY = freshPreferences();
   let eligibilityX = null;
   let eligibilityY = null;
   let movementBaselineX = 0;
@@ -109,7 +115,9 @@
     motorLeft: 0, motorRight: 0, motorUp: 0, motorDown: 0,
     frontLimb: 0, dopamine: 0, moveX: 0, moveY: 0,
     contextX: 2, contextY: 2, fireCooldown: 0, decisionTimer: 0, noiseTimer: 0,
-    spontaneousX: 0, spontaneousY: 0, turnBiasX: 0, turnBiasY: 0
+    spontaneousX: 0, spontaneousY: 0, turnBiasX: 0, turnBiasY: 0,
+    goalMode: "none", goalErrorX: 0, goalErrorY: 0, goalConfidence: 0,
+    rewardReferenceX: 0, rewardReferenceY: 0, progressRewardTimer: 0
   };
 
   const three = {
@@ -122,8 +130,16 @@
   function lerp(a, b, amount) { return a + (b - a) * amount; }
   function randomUnit() { sensorySeed = (sensorySeed * 1664525 + 1013904223) >>> 0; return sensorySeed / 4294967296; }
   function sensoryNoise(amount) { return (randomUnit() * 2 - 1) * amount; }
-  function freshPreferences() { return ACTIONS.map(() => ACTIONS.map(() => 0)); }
-  function freshEligibility() { return ACTIONS.map(() => ACTIONS.map(() => 0)); }
+  function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
+  function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
+  function explorationNoise() {
+    return Math.max(ACTION_NOISE_FLOOR, ACTION_NOISE_START * Math.exp(-episode / EXPLORATION_DECAY));
+  }
+  function quantizeContext(error, closingRate) {
+    const positionBand = clamp(Math.floor((error + 1) * 1.5), 0, 2);
+    const trendBand = closingRate > 0.012 ? 2 : closingRate < -0.012 ? 0 : 1;
+    return positionBand * 3 + trendBand;
+  }
 
   function createRings(episodeNumber) {
     let seed = (0x9e3779b9 ^ Math.imul(episodeNumber + 1, 0x45d9f3b)) >>> 0;
@@ -131,7 +147,7 @@
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 4294967296;
     };
-    const variation = episodeNumber === 0 ? 0 : 1;
+    const variation = episodeNumber === 0 ? 0 : Math.min(1, episodeNumber / 80);
     return baseRingX.map((baseX, index) => ({
       x: clamp(baseX + (next() * 2 - 1) * 72 * variation, -265, 265),
       y: clamp(baseRingY[index] + (next() * 2 - 1) * 58 * variation, -180, 180),
@@ -159,6 +175,13 @@
     neural.spontaneousY = 0;
     neural.turnBiasX = 0;
     neural.turnBiasY = 0;
+    neural.goalMode = "none";
+    neural.goalErrorX = 0;
+    neural.goalErrorY = 0;
+    neural.goalConfidence = 0;
+    neural.rewardReferenceX = 0;
+    neural.rewardReferenceY = 0;
+    neural.progressRewardTimer = 0;
     neural.frontLimb = 0;
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
@@ -222,6 +245,12 @@
     const rows = new Array(RETINA_HEIGHT).fill(0);
     const targetColumns = new Array(RETINA_WIDTH).fill(0);
     const targetRows = new Array(RETINA_HEIGHT).fill(0);
+    let ringWeight = 0;
+    let ringCentroidX = 0;
+    let ringCentroidY = 0;
+    let targetWeight = 0;
+    let targetCentroidX = 0;
+    let targetCentroidY = 0;
     const yStart = 2;
     const yEnd = RETINA_HEIGHT - 3;
 
@@ -236,9 +265,19 @@
         const salience = clamp(chroma * 1.75 + Math.max(0, luminance - 0.2) * 0.48, 0, 1);
         columns[x] += salience;
         rows[y] += salience;
-        if (red > 0.42 && blue > green * 1.35 && red + blue > 1.0) {
+        const targetPixel = red > 0.5 && blue > 0.55 && green < 0.45
+          && Math.abs(red - blue) < 0.23 && red + blue > 1.25;
+        if (targetPixel) {
           targetColumns[x] += 1;
           targetRows[y] += 1;
+          targetWeight += 1;
+          targetCentroidX += x;
+          targetCentroidY += y;
+        } else if (chroma > 0.18 && luminance > 0.16) {
+          const ringPixelWeight = chroma * (0.55 + luminance);
+          ringWeight += ringPixelWeight;
+          ringCentroidX += x * ringPixelWeight;
+          ringCentroidY += y * ringPixelWeight;
         }
       }
     }
@@ -271,14 +310,25 @@
     const targetX = targetColumns.slice(centerX0, centerX1).reduce((sum, value) => sum + value, 0);
     const targetY = targetRows.slice(centerY0, centerY1).reduce((sum, value) => sum + value, 0);
     const targetCenter = (targetX + targetY) / ((centerX1 - centerX0) * rowCount + (centerY1 - centerY0) * RETINA_WIDTH);
+    const targetColumnCenter = targetWeight ? targetCentroidX / targetWeight : RETINA_WIDTH * 0.5;
+    const targetRowCenter = targetWeight ? targetCentroidY / targetWeight : RETINA_HEIGHT * 0.5;
+    const ringColumnCenter = ringWeight ? ringCentroidX / ringWeight : RETINA_WIDTH * 0.5;
+    const ringRowCenter = ringWeight ? ringCentroidY / ringWeight : RETINA_HEIGHT * 0.5;
     return {
       left: clamp(left * 2.45, 0, 1), right: clamp(right * 2.45, 0, 1),
       up: clamp(up * 2.7, 0, 1), down: clamp(down * 2.7, 0, 1),
-      center: clamp(center * 2.2, 0, 1), targetCenter: clamp(targetCenter * 6.5, 0, 1)
+      center: clamp(center * 2.2, 0, 1), targetCenter: clamp(targetCenter * 6.5, 0, 1),
+      ringErrorX: clamp((ringColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
+      ringErrorY: clamp((RETINA_HEIGHT * 0.5 - ringRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
+      ringConfidence: clamp(ringWeight / 20, 0, 1),
+      ringSize: clamp(Math.sqrt(ringWeight / 60), 0, 1),
+      targetErrorX: clamp((targetColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
+      targetErrorY: clamp((RETINA_HEIGHT * 0.5 - targetRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
+      targetConfidence: clamp(targetWeight / 12, 0, 1)
     };
   }
 
-  function selectAxisAction(axis, visualDifference) {
+  function selectAxisAction(axis, visualDifference, goalError) {
     const isX = axis === "x";
     const context = isX ? neural.contextX : neural.contextY;
     const preferences = isX ? preferencesX : preferencesY;
@@ -287,10 +337,10 @@
     let bestIndex = 0;
     let bestScore = -Infinity;
     ACTIONS.forEach((action, index) => {
-      const weakReflex = visualDifference * action * 0.13;
+      const weakReflex = (visualDifference * 0.08 + goalError * 0.18) * action;
       const spontaneousBias = spontaneous * action * 0.23;
       const adaptationBias = -adaptation * action * 0.27;
-      const score = preferences[context][index] + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(ACTION_NOISE);
+      const score = preferences[context][index] + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
@@ -305,8 +355,25 @@
     neural.visualDown = lerp(neural.visualDown, input.down, visualMix);
     const differenceX = clamp(neural.visualRight - neural.visualLeft, -1, 1);
     const differenceY = clamp(neural.visualUp - neural.visualDown, -1, 1);
-    neural.contextX = clamp(Math.round(differenceX * 2) + 2, 0, 4);
-    neural.contextY = clamp(Math.round(differenceY * 2) + 2, 0, 4);
+    const previousGoalMode = neural.goalMode;
+    const ringVisible = input.ringConfidence > 0.12;
+    const targetVisible = input.targetConfidence > 0.18;
+    const goalMode = ringVisible ? "ring" : targetVisible ? "target" : "none";
+    const goalErrorX = ringVisible ? input.ringErrorX : targetVisible ? input.targetErrorX : differenceX;
+    const goalErrorY = ringVisible ? input.ringErrorY : targetVisible ? input.targetErrorY : differenceY;
+    const goalConfidence = ringVisible ? input.ringConfidence : targetVisible ? input.targetConfidence : 0;
+    const goalClosingX = previousGoalMode === goalMode ? Math.abs(neural.goalErrorX) - Math.abs(goalErrorX) : 0;
+    const goalClosingY = previousGoalMode === goalMode ? Math.abs(neural.goalErrorY) - Math.abs(goalErrorY) : 0;
+    neural.goalMode = goalMode;
+    neural.goalErrorX = goalErrorX;
+    neural.goalErrorY = goalErrorY;
+    neural.goalConfidence = goalConfidence;
+    if (previousGoalMode !== goalMode) {
+      neural.rewardReferenceX = goalErrorX;
+      neural.rewardReferenceY = goalErrorY;
+    }
+    neural.contextX = quantizeContext(goalErrorX, goalClosingX);
+    neural.contextY = quantizeContext(goalErrorY, goalClosingY);
 
     neural.noiseTimer -= dt;
     if (neural.noiseTimer <= 0) {
@@ -319,8 +386,8 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
-      selectAxisAction("x", differenceX);
-      selectAxisAction("y", differenceY);
+      selectAxisAction("x", differenceX, goalErrorX);
+      selectAxisAction("y", differenceY, goalErrorY);
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
     const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
@@ -328,6 +395,18 @@
     eligibilityY = eligibilityY.map((row) => row.map((value) => value * eligibilityMix));
     eligibilityX[neural.contextX][actionXIndex] = Math.max(eligibilityX[neural.contextX][actionXIndex], 1);
     eligibilityY[neural.contextY][actionYIndex] = Math.max(eligibilityY[neural.contextY][actionYIndex], 1);
+
+    neural.progressRewardTimer -= dt;
+    if (goalConfidence > 0.12 && neural.progressRewardTimer <= 0) {
+      const progressX = clamp((Math.abs(neural.rewardReferenceX) - Math.abs(goalErrorX)) * PROGRESS_REWARD_SCALE, -0.12, 0.12);
+      const progressY = clamp((Math.abs(neural.rewardReferenceY) - Math.abs(goalErrorY)) * PROGRESS_REWARD_SCALE, -0.12, 0.12);
+      if (Math.abs(progressX) + Math.abs(progressY) > 0.004) {
+        applyMovementReward(progressX, progressY, progressX + progressY > 0 ? COLORS.blue : COLORS.red);
+      }
+      neural.rewardReferenceX = goalErrorX;
+      neural.rewardReferenceY = goalErrorY;
+      neural.progressRewardTimer = 0.12;
+    }
 
     const targetX = ACTIONS[actionXIndex] * 0.62 + differenceX * 0.08 + neural.spontaneousX * 0.3 - neural.turnBiasX * 0.2;
     const targetY = ACTIONS[actionYIndex] * 0.62 + differenceY * 0.08 + neural.spontaneousY * 0.3 - neural.turnBiasY * 0.2;
@@ -357,7 +436,7 @@
   }
 
   function reinforcePreference(preferences, delta, eligibility) {
-    for (let context = 0; context < ACTIONS.length; context += 1) {
+    for (let context = 0; context < preferences.length; context += 1) {
       for (let index = 0; index < ACTIONS.length; index += 1) {
         preferences[context][index] += LEARNING_RATE * delta * eligibility[context][index];
       }
@@ -451,24 +530,46 @@
       trainingCtx.fillText("Run or fast-forward an episode to populate the graph", cssWidth * 0.5, padding.top + plotHeight * 0.5);
     }
 
+    const visibleValues = (values) => values.slice(graphWindow.dataStart, graphWindow.dataEnd + 1);
     const drawSeries = (values, max, color) => {
       if (!values.length) return;
+      const visible = visibleValues(values);
       trainingCtx.strokeStyle = color;
       trainingCtx.fillStyle = color;
       trainingCtx.lineWidth = 2;
       trainingCtx.beginPath();
-      values.slice(graphWindow.dataStart, graphWindow.dataEnd + 1).forEach((value, index) => {
+      visible.forEach((value, index) => {
         const x = xForEpisode(graphWindow.dataStart + index + 1);
         const y = yFor(value, max);
         if (index === 0) trainingCtx.moveTo(x, y); else trainingCtx.lineTo(x, y);
       });
       trainingCtx.stroke();
-      values.slice(graphWindow.dataStart, graphWindow.dataEnd + 1).forEach((value, index) => {
+      visible.forEach((value, index) => {
         trainingCtx.beginPath();
         trainingCtx.arc(xForEpisode(graphWindow.dataStart + index + 1), yFor(value, max), 2.5, 0, Math.PI * 2);
         trainingCtx.fill();
       });
     };
+    const drawMovingAverage = (values, max, color) => {
+      if (values.length < 2) return;
+      trainingCtx.strokeStyle = color;
+      trainingCtx.lineWidth = 2;
+      trainingCtx.setLineDash([5, 4]);
+      trainingCtx.beginPath();
+      visibleValues(values).forEach((value, index) => {
+        const endIndex = graphWindow.dataStart + index;
+        const startIndex = Math.max(0, endIndex - MOVING_AVERAGE_WINDOW + 1);
+        const samples = values.slice(startIndex, endIndex + 1);
+        const average = samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
+        const x = xForEpisode(endIndex + 1);
+        const y = yFor(average, max);
+        if (index === 0) trainingCtx.moveTo(x, y); else trainingCtx.lineTo(x, y);
+      });
+      trainingCtx.stroke();
+      trainingCtx.setLineDash([]);
+    };
+    drawMovingAverage(ringHistory, 10, "#b4f3ca");
+    drawMovingAverage(targetHistory, 2, "#ffd27b");
     drawSeries(ringHistory, 10, "#58d68d");
     drawSeries(targetHistory, 2, "#f1ad45");
     if (ui.graphSummary) {
@@ -550,7 +651,13 @@
       nextRingIndex += 1;
     }
     for (const target of targets) {
-      if (!target.hit && !target.missed && player.z > target.z + 75) target.missed = true;
+      if (!target.hit && !target.missed && player.z > target.z + 75) {
+        target.missed = true;
+        if (target === targets[nextTargetIndex]) {
+          applyFireReward(TARGET_MISS_REWARD, COLORS.red);
+          nextTargetIndex += 1;
+        }
+      }
     }
   }
 
@@ -612,11 +719,23 @@
       running = true;
     }
     let framesThisChunk = 0;
-    while (running && state.frames < state.maxFrames && framesThisChunk < FAST_FORWARD_CHUNK) {
+    try {
+      while (running && state.frames < state.maxFrames && framesThisChunk < FAST_FORWARD_CHUNK) {
         drawGame();
         step(FAST_FORWARD_DT);
         state.frames += 1;
         framesThisChunk += 1;
+      }
+    } catch (error) {
+      running = false;
+      fastForwarding = false;
+      fastForwardState = null;
+      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = false; });
+      console.error(error);
+      syncUI();
+      ui.status.textContent = "ERROR";
+      ui.message.textContent = `TRAINING ERROR: ${error.message}`;
+      return;
     }
     if (running && state.frames < state.maxFrames) {
       window.setTimeout(runFastForwardChunk, 0);

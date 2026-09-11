@@ -99,12 +99,14 @@
       <section class="control-panel">
         <div class="control-copy">
           <h2>Closed-loop 3D neural replay</h2>
-          <p>The game camera is reduced to a tiny retinal image. Four visual channels drive two motor axes; rewards only change action preferences after the fly acts. Each episode varies the ring layout so the controller cannot simply memorize one route.</p>
+          <p>The game camera is reduced to a tiny retinal image. Broad visual activity is combined with ring and target position features to drive two motor axes. Approach, alignment, ring, and target outcomes provide dopamine-like feedback while exploration gradually decreases.</p>
         </div>
         <div class="control-list" aria-label="Neural replay information">
           <span>48 × 27 camera image supplies visual activity</span>
-          <span>Independent horizontal and vertical exploration</span>
-          <span>Positive ring reward updates action preferences</span>
+          <span>Retinal ring and target alignment features guide movement</span>
+          <span>Dense approach rewards plus ring success feedback</span>
+          <span>Target alignment reinforces movement and firing separately</span>
+          <span>Exploration noise decays across episodes</span>
           <span>Episode-specific ring layouts discourage route memorization</span>
           <span>Front-limb activity triggers firing</span>
           <span>NeuroMechFly-derived scanned body mesh</span>
@@ -146,7 +148,9 @@
           <canvas id="training-graph" width="720" height="190" role="img" aria-label="Training history graph showing rings completed and shots made per episode"></canvas>
           <div class="graph-legend" aria-label="Training graph legend">
             <span><i class="graph-rings"></i>RINGS COMPLETED / 10</span>
+            <span><i class="graph-rings-average"></i>RINGS 10-EP AVG</span>
             <span><i class="graph-shots"></i>SHOTS MADE / 2</span>
+            <span><i class="graph-shots-average"></i>SHOTS 10-EP AVG</span>
           </div>
         </div>
       </section>
