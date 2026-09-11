@@ -129,6 +129,20 @@
             <strong>TRAINING HISTORY</strong>
             <span id="graph-summary">NO COMPLETED EPISODES</span>
           </div>
+          <div class="training-graph-controls" aria-label="Training graph range controls">
+            <label>VIEW
+              <select id="graph-window">
+                <option value="full">FULL: 0 → LATEST</option>
+                <option value="last10">LAST 10 EPISODES</option>
+                <option value="last25">LAST 25 EPISODES</option>
+                <option value="last50">LAST 50 EPISODES</option>
+                <option value="custom">CUSTOM RANGE</option>
+              </select>
+            </label>
+            <label>FROM <input id="graph-from" type="number" min="0" value="0" /></label>
+            <label>TO <input id="graph-to" type="number" min="1" placeholder="Latest" /></label>
+            <button id="graph-apply" class="secondary" type="button">Apply zoom</button>
+          </div>
           <canvas id="training-graph" width="720" height="190" role="img" aria-label="Training history graph showing rings completed and shots made per episode"></canvas>
           <div class="graph-legend" aria-label="Training graph legend">
             <span><i class="graph-rings"></i>RINGS COMPLETED / 10</span>

@@ -98,6 +98,12 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .training-graph { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
 .training-graph-heading { display: flex; justify-content: space-between; gap: 1rem; color: var(--blue); font-size: 0.65rem; font-weight: 850; letter-spacing: 0.09em; }
 .training-graph-heading span { color: var(--muted); font-weight: 600; letter-spacing: 0.04em; }
+.training-graph-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.55rem; color: var(--muted); font-size: 0.61rem; font-weight: 800; letter-spacing: 0.06em; }
+.training-graph-controls label { display: grid; gap: 0.22rem; }
+.training-graph-controls select, .training-graph-controls input { min-height: 1.9rem; border: 1px solid #45637e; background: #091423; color: var(--ink); font: inherit; letter-spacing: 0; padding: 0.25rem 0.4rem; }
+.training-graph-controls select { min-width: 11rem; }
+.training-graph-controls input { width: 4.3rem; }
+.training-graph-controls button { min-height: 1.9rem; padding: 0.35rem 0.6rem; font-size: 0.63rem; }
 #training-graph { display: block; width: 100%; height: 190px; margin-top: 0.45rem; border: 1px solid #45637e; background: #030914; }
 .graph-legend { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; margin-top: 0.4rem; color: var(--muted); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; }
 .graph-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -118,4 +124,5 @@ footer a:hover, footer a:focus-visible { color: var(--ink); }
   .retina-row { align-items: flex-start; flex-direction: column; }
   .sensor-previews { align-items: flex-start !important; flex-wrap: wrap; }
   .training-jump { align-items: flex-start; flex-direction: column; }
+  .training-graph-heading { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
 }

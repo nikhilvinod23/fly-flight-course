@@ -17,7 +17,8 @@
     start: document.getElementById("start-button"), run: document.getElementById("run-button"),
     resetLearning: document.getElementById("reset-learning"), skip5: document.getElementById("skip-5"),
     skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), action: document.getElementById("action-label"),
-    graphSummary: document.getElementById("graph-summary"),
+    graphSummary: document.getElementById("graph-summary"), graphWindow: document.getElementById("graph-window"),
+    graphFrom: document.getElementById("graph-from"), graphTo: document.getElementById("graph-to"), graphApply: document.getElementById("graph-apply"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
     visualLeft: document.getElementById("visual-left"), visualRight: document.getElementById("visual-right"),
     visualUp: document.getElementById("visual-up"), visualDown: document.getElementById("visual-down"),
@@ -96,6 +97,9 @@
   let targetHistory = [];
   let fastForwarding = false;
   let fastForwardState = null;
+  let graphMode = "full";
+  let customGraphStart = 0;
+  let customGraphEnd = 0;
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
@@ -370,6 +374,30 @@
     ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)}.`;
   }
 
+  function getGraphWindow() {
+    const total = ringHistory.length;
+    if (!total) return { axisStart: 0, axisEnd: 1, dataStart: 0, dataEnd: -1 };
+    let axisStart = 0;
+    let axisEnd = total;
+    if (graphMode === "last10") axisStart = Math.max(0, total - 10);
+    if (graphMode === "last25") axisStart = Math.max(0, total - 25);
+    if (graphMode === "last50") axisStart = Math.max(0, total - 50);
+    if (graphMode === "custom") {
+      axisStart = clamp(Math.floor(customGraphStart), 0, Math.max(0, total - 1));
+      axisEnd = clamp(Math.floor(customGraphEnd || total), axisStart + 1, total);
+    }
+    return { axisStart, axisEnd, dataStart: Math.max(0, axisStart - 1), dataEnd: Math.min(total - 1, axisEnd - 1) };
+  }
+
+  function applyGraphWindow() {
+    graphMode = ui.graphWindow.value;
+    if (graphMode === "custom") {
+      customGraphStart = Math.max(0, Number.parseInt(ui.graphFrom.value, 10) || 0);
+      customGraphEnd = Math.max(customGraphStart + 1, Number.parseInt(ui.graphTo.value, 10) || ringHistory.length || 1);
+    }
+    drawTrainingGraph();
+  }
+
   function drawTrainingGraph() {
     if (!trainingCanvas || !trainingCtx) return;
     const rect = trainingCanvas.getBoundingClientRect();
@@ -384,9 +412,9 @@
     const padding = { left: 32, right: 34, top: 16, bottom: 24 };
     const plotWidth = cssWidth - padding.left - padding.right;
     const plotHeight = cssHeight - padding.top - padding.bottom;
-    const start = Math.max(0, ringHistory.length - 60);
-    const count = Math.max(1, ringHistory.length - start);
-    const xFor = (index) => padding.left + (count === 1 ? plotWidth * 0.5 : (index / (count - 1)) * plotWidth);
+    const graphWindow = getGraphWindow();
+    const axisSpan = Math.max(1, graphWindow.axisEnd - graphWindow.axisStart);
+    const xForEpisode = (episodeNumber) => padding.left + ((episodeNumber - graphWindow.axisStart) / axisSpan) * plotWidth;
     const yFor = (value, max) => padding.top + plotHeight - clamp(value / max, 0, 1) * plotHeight;
 
     trainingCtx.fillStyle = "#030914";
@@ -414,9 +442,9 @@
     trainingCtx.fillText("SHOTS", cssWidth - 5, 8);
     if (ringHistory.length) {
       trainingCtx.textAlign = "left";
-      trainingCtx.fillText(`EP ${start + 1}`, padding.left, cssHeight - 9);
+      trainingCtx.fillText(`EP ${graphWindow.axisStart}`, padding.left, cssHeight - 9);
       trainingCtx.textAlign = "right";
-      trainingCtx.fillText(`EP ${ringHistory.length}`, cssWidth - padding.right, cssHeight - 9);
+      trainingCtx.fillText(`EP ${graphWindow.axisEnd}`, cssWidth - padding.right, cssHeight - 9);
     } else {
       trainingCtx.textAlign = "center";
       trainingCtx.fillStyle = "#71869b";
@@ -429,15 +457,15 @@
       trainingCtx.fillStyle = color;
       trainingCtx.lineWidth = 2;
       trainingCtx.beginPath();
-      values.slice(start).forEach((value, index) => {
-        const x = xFor(index);
+      values.slice(graphWindow.dataStart, graphWindow.dataEnd + 1).forEach((value, index) => {
+        const x = xForEpisode(graphWindow.dataStart + index + 1);
         const y = yFor(value, max);
         if (index === 0) trainingCtx.moveTo(x, y); else trainingCtx.lineTo(x, y);
       });
       trainingCtx.stroke();
-      values.slice(start).forEach((value, index) => {
+      values.slice(graphWindow.dataStart, graphWindow.dataEnd + 1).forEach((value, index) => {
         trainingCtx.beginPath();
-        trainingCtx.arc(xFor(index), yFor(value, max), 2.5, 0, Math.PI * 2);
+        trainingCtx.arc(xForEpisode(graphWindow.dataStart + index + 1), yFor(value, max), 2.5, 0, Math.PI * 2);
         trainingCtx.fill();
       });
     };
@@ -1139,6 +1167,8 @@
   ui.skip5.addEventListener("click", () => fastForwardEpisodes(5));
   ui.skip10.addEventListener("click", () => fastForwardEpisodes(10));
   ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));
+  ui.graphWindow.addEventListener("change", applyGraphWindow);
+  ui.graphApply.addEventListener("click", applyGraphWindow);
 
   resizeGame();
   resetEpisode();
