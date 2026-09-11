@@ -13,7 +13,8 @@
     rings: document.getElementById("rings-count"), targets: document.getElementById("targets-count"),
     message: document.getElementById("message-label"), card: document.getElementById("start-card"),
     start: document.getElementById("start-button"), run: document.getElementById("run-button"),
-    resetLearning: document.getElementById("reset-learning"), action: document.getElementById("action-label"),
+    resetLearning: document.getElementById("reset-learning"), skip5: document.getElementById("skip-5"),
+    skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), action: document.getElementById("action-label"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
     visualLeft: document.getElementById("visual-left"), visualRight: document.getElementById("visual-right"),
     visualUp: document.getElementById("visual-up"), visualDown: document.getElementById("visual-down"),
@@ -35,18 +36,24 @@
   const TARGET_HIT_RADIUS = 82;
   const BULLET_SPEED = 920;
   const RING_SPACING = 650;
-  const LEARNING_RATE = 0.08;
+  const LEARNING_RATE = 0.24;
+  const ACTION_NOISE = 0.18;
+  const ELIGIBILITY_DECAY = 0.42;
+  const BASELINE_MIX = 0.08;
+  const RING_SUCCESS_REWARD = 1.2;
+  const RING_MISS_REWARD = -0.9;
+  const TARGET_REWARD = 0.22;
+  const FAST_FORWARD_DT = 1 / 30;
+  const FAST_FORWARD_CHUNK = 60;
+  const MAX_RECENT_EPISODES = 10;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
 
-  const ringX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
-  const ringY = [120, -115, 165, 35, -150, 130, -55, 175, -175, 65];
-  const ringAngles = [-0.18, 0.52, -0.86, 0.28, 1.12, -0.42, 0.74, -1.02, 0.36, -0.64];
-  const ringSquash = [0.72, 0.5, 0.82, 0.58, 0.68, 0.46, 0.76, 0.55, 0.84, 0.62];
-  const rings = ringX.map((x, index) => ({
-    x, y: ringY[index], z: 700 + index * RING_SPACING, angle: ringAngles[index], squash: ringSquash[index],
-    color: RING_COLORS[index % RING_COLORS.length], result: null
-  }));
+  const baseRingX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
+  const baseRingY = [120, -115, 165, 35, -150, 130, -55, 175, -175, 65];
+  const baseRingAngles = [-0.18, 0.52, -0.86, 0.28, 1.12, -0.42, 0.74, -1.02, 0.36, -0.64];
+  const baseRingSquash = [0.72, 0.5, 0.82, 0.58, 0.68, 0.46, 0.76, 0.55, 0.84, 0.62];
+  let rings = [];
   const targetBlueprint = [{ x: 35, y: -145, z: 1600 }, { x: -85, y: 145, z: 4600 }];
   const stars = Array.from({ length: 95 }, (_, index) => ({
     x: ((index * 83) % 997) / 997, y: ((index * 47 + 19) % 541) / 541,
@@ -72,8 +79,19 @@
   let actionYIndex = 2;
   let preferencesX = ACTIONS.map(() => ACTIONS.map(() => 0));
   let preferencesY = ACTIONS.map(() => ACTIONS.map(() => 0));
-  let eligibilityX = ACTIONS.map(() => 0);
-  let eligibilityY = ACTIONS.map(() => 0);
+  let eligibilityX = null;
+  let eligibilityY = null;
+  let movementBaselineX = 0;
+  let movementBaselineY = 0;
+  let firePreference = 0;
+  let fireBaseline = 0;
+  let fireEligibility = 0;
+  let episodeRingHits = 0;
+  let episodeRecorded = false;
+  let ringHistory = [];
+  let targetHistory = [];
+  let fastForwarding = false;
+  let fastForwardState = null;
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
@@ -97,8 +115,26 @@
   function randomUnit() { sensorySeed = (sensorySeed * 1664525 + 1013904223) >>> 0; return sensorySeed / 4294967296; }
   function sensoryNoise(amount) { return (randomUnit() * 2 - 1) * amount; }
   function freshPreferences() { return ACTIONS.map(() => ACTIONS.map(() => 0)); }
+  function freshEligibility() { return ACTIONS.map(() => ACTIONS.map(() => 0)); }
 
-  function resetEpisode() {
+  function createRings(episodeNumber) {
+    let seed = (0x9e3779b9 ^ Math.imul(episodeNumber + 1, 0x45d9f3b)) >>> 0;
+    const next = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const variation = episodeNumber === 0 ? 0 : 1;
+    return baseRingX.map((baseX, index) => ({
+      x: clamp(baseX + (next() * 2 - 1) * 72 * variation, -265, 265),
+      y: clamp(baseRingY[index] + (next() * 2 - 1) * 58 * variation, -180, 180),
+      z: 700 + index * RING_SPACING,
+      angle: baseRingAngles[index] + (next() * 2 - 1) * 0.2 * variation,
+      squash: clamp(baseRingSquash[index] + (next() * 2 - 1) * 0.08 * variation, 0.42, 0.88),
+      color: RING_COLORS[index % RING_COLORS.length], result: null
+    }));
+  }
+
+  function resetEpisode(render = true) {
     player = { x: 0, y: 0, z: 0 };
     targets = targetBlueprint.map((target) => ({ ...target, hit: false, missed: false }));
     bullets = [];
@@ -115,21 +151,38 @@
     neural.spontaneousY = 0;
     neural.turnBiasX = 0;
     neural.turnBiasY = 0;
+    neural.frontLimb = 0;
+    eligibilityX = freshEligibility();
+    eligibilityY = freshEligibility();
+    fireEligibility = 0;
+    rings = createRings(episode);
+    episodeRingHits = 0;
+    episodeRecorded = false;
     sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
     previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
     previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
     rings.forEach((ring) => { ring.result = null; });
-    syncUI();
-    drawGame();
-    updateRetinaFromCamera();
-    updateThree();
+    if (render) {
+      syncUI();
+      drawGame();
+      updateRetinaFromCamera();
+      updateThree();
+    }
   }
 
   function resetLearning() {
+    if (running || fastForwarding) return;
     preferencesX = freshPreferences();
     preferencesY = freshPreferences();
-    eligibilityX = ACTIONS.map(() => 0);
-    eligibilityY = ACTIONS.map(() => 0);
+    eligibilityX = freshEligibility();
+    eligibilityY = freshEligibility();
+    movementBaselineX = 0;
+    movementBaselineY = 0;
+    firePreference = 0;
+    fireBaseline = 0;
+    fireEligibility = 0;
+    ringHistory = [];
+    targetHistory = [];
     episode = 0;
     resetEpisode();
     ui.learning.textContent = "Preferences are untrained. The fly is exploring in two axes.";
@@ -228,7 +281,7 @@
       const weakReflex = visualDifference * action * 0.13;
       const spontaneousBias = spontaneous * action * 0.23;
       const adaptationBias = -adaptation * action * 0.27;
-      const score = preferences[context][index] + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(0.62);
+      const score = preferences[context][index] + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(ACTION_NOISE);
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
@@ -261,10 +314,11 @@
       selectAxisAction("y", differenceY);
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
-    eligibilityX = eligibilityX.map((value) => value * Math.exp(-dt * 2));
-    eligibilityY = eligibilityY.map((value) => value * Math.exp(-dt * 2));
-    eligibilityX[actionXIndex] = Math.max(eligibilityX[actionXIndex], 1);
-    eligibilityY[actionYIndex] = Math.max(eligibilityY[actionYIndex], 1);
+    const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
+    eligibilityX = eligibilityX.map((row) => row.map((value) => value * eligibilityMix));
+    eligibilityY = eligibilityY.map((row) => row.map((value) => value * eligibilityMix));
+    eligibilityX[neural.contextX][actionXIndex] = Math.max(eligibilityX[neural.contextX][actionXIndex], 1);
+    eligibilityY[neural.contextY][actionYIndex] = Math.max(eligibilityY[neural.contextY][actionYIndex], 1);
 
     const targetX = ACTIONS[actionXIndex] * 0.62 + differenceX * 0.08 + neural.spontaneousX * 0.3 - neural.turnBiasX * 0.2;
     const targetY = ACTIONS[actionYIndex] * 0.62 + differenceY * 0.08 + neural.spontaneousY * 0.3 - neural.turnBiasY * 0.2;
@@ -283,25 +337,58 @@
       const targetDepth = target.z - player.z;
       const targetVisual = input.targetCenter * input.center;
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
-      if (targetVisual > 0.18 && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
+      fireEligibility = Math.max(fireEligibility * Math.exp(-dt * 1.4), targetVisual);
+      const fireThreshold = clamp(0.2 - firePreference * 0.04, 0.08, 0.26);
+      if (targetVisual > fireThreshold && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
     } else {
       neural.frontLimb = lerp(neural.frontLimb, 0, 1 - Math.exp(-dt * 12));
+      fireEligibility *= Math.exp(-dt * 1.4);
     }
     neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
   }
 
-  function applyReward(reward, color = null) {
+  function reinforcePreference(preferences, delta, eligibility) {
+    for (let context = 0; context < ACTIONS.length; context += 1) {
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        preferences[context][index] += LEARNING_RATE * delta * eligibility[context][index];
+      }
+      preferences[context] = preferences[context].map((value) => clamp(value, -2.5, 2.5));
+    }
+  }
+
+  function updateLearningReadout() {
+    const all = preferencesX.flat().concat(preferencesY.flat());
+    const average = all.reduce((sum, value) => sum + value, 0) / all.length;
+    const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
+    const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
+    const currentHits = rings.filter((ring) => ring.result === "hit").length;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)}.`;
+  }
+
+  function applyMovementReward(rewardX, rewardY, color = null) {
+    const deltaX = rewardX - movementBaselineX;
+    const deltaY = rewardY - movementBaselineY;
+    movementBaselineX = lerp(movementBaselineX, rewardX, BASELINE_MIX);
+    movementBaselineY = lerp(movementBaselineY, rewardY, BASELINE_MIX);
+    reinforcePreference(preferencesX, deltaX, eligibilityX);
+    reinforcePreference(preferencesY, deltaY, eligibilityY);
+    const reward = (rewardX + rewardY) * 0.5;
     lastReward = reward;
     rewardFlash = reward > 0 ? 0.65 : -0.55;
     rewardColor = color || (reward > 0 ? COLORS.green : COLORS.red);
     neural.dopamine = reward > 0 ? reward : 0;
-    for (let index = 0; index < ACTIONS.length; index += 1) {
-      preferencesX[neural.contextX][index] += LEARNING_RATE * reward * eligibilityX[index];
-      preferencesY[neural.contextY][index] += LEARNING_RATE * reward * eligibilityY[index];
-    }
-    const all = preferencesX.flat().concat(preferencesY.flat());
-    const average = all.reduce((sum, value) => sum + value, 0) / all.length;
-    ui.learning.textContent = `Visual contexts X${neural.contextX + 1}/5 · Y${neural.contextY + 1}/5 · preference mean ${average.toFixed(2)}.`;
+    updateLearningReadout();
+  }
+
+  function applyFireReward(reward, color = null) {
+    const delta = reward - fireBaseline;
+    fireBaseline = lerp(fireBaseline, reward, BASELINE_MIX);
+    firePreference = clamp(firePreference + LEARNING_RATE * delta * fireEligibility, -1, 1);
+    lastReward = reward;
+    rewardFlash = reward > 0 ? 0.65 : -0.55;
+    rewardColor = color || (reward > 0 ? COLORS.green : COLORS.red);
+    neural.dopamine = reward > 0 ? reward : 0;
+    updateLearningReadout();
   }
 
   function fire() {
@@ -322,7 +409,7 @@
           target.hit = true;
           bullet.life = 0;
           explosions.push({ x: target.x, y: target.y, z: target.z, life: 0.68 });
-          applyReward(0.5, COLORS.amber);
+          applyFireReward(TARGET_REWARD, COLORS.amber);
           if (target === targets[nextTargetIndex]) nextTargetIndex += 1;
           break;
         }
@@ -336,9 +423,17 @@
   function updateCourse() {
     while (nextRingIndex < rings.length && player.z >= rings[nextRingIndex].z) {
       const ring = rings[nextRingIndex];
-      const success = Math.hypot(player.x - ring.x, player.y - ring.y) <= RING_RADIUS - RING_CLEARANCE;
+      const horizontalError = Math.abs(player.x - ring.x);
+      const verticalError = Math.abs(player.y - ring.y);
+      const success = Math.hypot(horizontalError, verticalError) <= RING_RADIUS - RING_CLEARANCE;
       ring.result = success ? "hit" : "miss";
-      applyReward(success ? 1 : -0.6, success ? ring.color : COLORS.red);
+      if (success) episodeRingHits += 1;
+      const radius = RING_RADIUS - RING_CLEARANCE;
+      const xQuality = 1 - clamp(horizontalError / radius, 0, 1);
+      const yQuality = 1 - clamp(verticalError / radius, 0, 1);
+      const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
+      const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
+      applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
       nextRingIndex += 1;
     }
     for (const target of targets) {
@@ -360,10 +455,80 @@
 
   function finishEpisode() {
     running = false;
+    recordEpisodeStats();
     ui.card.hidden = false;
     ui.status.textContent = "COMPLETE";
     ui.message.textContent = "EPISODE COMPLETE";
     ui.start.textContent = "Run next episode";
+  }
+
+  function recordEpisodeStats() {
+    if (episodeRecorded) return;
+    episodeRecorded = true;
+    ringHistory.push(episodeRingHits);
+    targetHistory.push(targets.filter((target) => target.hit).length);
+    if (ringHistory.length > MAX_RECENT_EPISODES) ringHistory.shift();
+    if (targetHistory.length > MAX_RECENT_EPISODES) targetHistory.shift();
+    updateLearningReadout();
+  }
+
+  function fastForwardEpisodes(count) {
+    if (running || fastForwarding) return;
+    fastForwarding = true;
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = true; });
+    ui.card.hidden = false;
+    ui.status.textContent = "SIMULATING";
+    ui.message.textContent = `FAST-FORWARD ×${count}`;
+
+    fastForwardState = {
+      count,
+      completed: 0,
+      frames: 0,
+      maxFrames: Math.ceil(COURSE_LENGTH / SPEED / FAST_FORWARD_DT) + 5
+    };
+    window.setTimeout(runFastForwardChunk, 0);
+  }
+
+  function runFastForwardChunk() {
+    const state = fastForwardState;
+    if (!state) return;
+    if (!running && state.frames === 0) {
+      episode += 1;
+      resetEpisode(false);
+      running = true;
+    }
+    let framesThisChunk = 0;
+    while (running && state.frames < state.maxFrames && framesThisChunk < FAST_FORWARD_CHUNK) {
+        drawGame();
+        step(FAST_FORWARD_DT);
+        state.frames += 1;
+        framesThisChunk += 1;
+    }
+    if (running && state.frames < state.maxFrames) {
+      window.setTimeout(runFastForwardChunk, 0);
+      return;
+    }
+    if (running) {
+      running = false;
+      recordEpisodeStats();
+    }
+    state.completed += 1;
+    ui.message.textContent = `SIMULATED ${state.completed}/${state.count}`;
+    if (state.completed < state.count) {
+      state.frames = 0;
+      window.setTimeout(runFastForwardChunk, 0);
+      return;
+    }
+    running = false;
+    resetEpisode();
+    ui.status.textContent = "READY";
+    ui.message.textContent = `READY AFTER ${state.count} SIMULATIONS`;
+    ui.start.textContent = "Run next episode";
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = false; });
+    fastForwarding = false;
+    fastForwardState = null;
+    syncUI();
+    drawGame();
   }
 
   function drawGameBackground() {
@@ -860,9 +1025,9 @@
   }
 
   function startEpisode() {
-    if (running) return;
-    if (player.z >= COURSE_LENGTH) resetEpisode();
+    if (running || fastForwarding) return;
     episode += 1;
+    resetEpisode();
     running = true;
     ui.card.hidden = true;
     lastTime = performance.now();
@@ -885,6 +1050,9 @@
   ui.start.addEventListener("click", startEpisode);
   ui.run.addEventListener("click", startEpisode);
   ui.resetLearning.addEventListener("click", resetLearning);
+  ui.skip5.addEventListener("click", () => fastForwardEpisodes(5));
+  ui.skip10.addEventListener("click", () => fastForwardEpisodes(10));
+  ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));
 
   resizeGame();
   resetEpisode();

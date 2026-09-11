@@ -89,6 +89,12 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 
 .control-panel { border-color: var(--line); }
 .control-copy p, .control-list, footer { color: var(--muted); }
+.training-jump { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.training-jump > div:first-child { display: grid; gap: 0.2rem; }
+.training-jump strong { color: var(--blue); font-size: 0.65rem; letter-spacing: 0.09em; }
+.training-jump small { color: var(--muted); font-size: 0.72rem; }
+.button-row.compact { margin: 0; }
+.button-row.compact button { padding: 0.55rem 0.75rem; font-size: 0.72rem; }
 footer a { color: var(--blue); text-decoration: underline; text-underline-offset: 0.18em; }
 footer a:hover, footer a:focus-visible { color: var(--ink); }
 
@@ -102,4 +108,5 @@ footer a:hover, footer a:focus-visible { color: var(--ink); }
   .readout-heading, .neural-readout p { grid-column: 1; }
   .retina-row { align-items: flex-start; flex-direction: column; }
   .sensor-previews { align-items: flex-start !important; flex-wrap: wrap; }
+  .training-jump { align-items: flex-start; flex-direction: column; }
 }

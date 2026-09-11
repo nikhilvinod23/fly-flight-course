@@ -49,9 +49,11 @@ The `static-replay-v1` branch contains a self-contained Level 1 scripted replay 
 
 The `neural-replay-v1` branch adds `neural-replay.html`, a closed-loop browser prototype with ten spatially varied rings, a 48 × 27 camera-to-retina view, two-axis visual/motor/spontaneous activity, dopamine-style reward-modulated preferences, and a Three.js NeuroMechFly body panel.
 
-The controller reads only the downsampled rendered image for horizontal/vertical steering and firing; game coordinates are retained for collision and reward bookkeeping. The retinal salience channels, action-selection circuit, neural-location overlay, and flight animation remain educational approximations rather than validated predictions from the full fly connectome.
+The controller reads only the downsampled rendered image for horizontal/vertical steering and firing; game coordinates are retained for collision and reward bookkeeping. Learning now uses stronger reward-modulated preferences, longer eligibility traces, lower exploration noise, axis-specific ring credit, and a separate firing preference. Each episode applies deterministic spatial jitter to the ring layout so the controller is encouraged to respond to ring appearance rather than memorize one fixed route. The retinal salience channels, action-selection circuit, neural-location overlay, and flight animation remain educational approximations rather than validated predictions from the full fly connectome.
 
 The 3D panel uses the simplified NeuroMechFly v2 mesh and rigging assets vendored by Xenova's Neural Canvas project. See `assets/neuromechfly/NOTICE` for source and license attribution. The adjacent brain preview uses the low-poly JRC2018U adult Drosophila atlas surface from `navis-flybrains`, with its license in `assets/brain/NAVIS_FLYBRAINS_LICENSE.txt`. The activity markers remain an educational pathway overlay rather than a full connectome firing reconstruction. If the body, atlas mesh, or browser loaders cannot be loaded, the display falls back gracefully.
+
+The replay includes `Skip 5`, `Skip 10`, and `Skip 25` controls. These simulate complete training episodes asynchronously, preserve the learned preferences, and leave the next episode ready for visual inspection. A rolling ring-completion percentage is shown beside the neural activity readout.
 
 ## GitHub Pages
 

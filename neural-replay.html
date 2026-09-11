@@ -45,7 +45,7 @@
               <span id="message-label">REPLAY READY</span>
             </div>
             <div id="start-card" class="start-card">
-              <p class="eyebrow">UNTRAINED 2-AXIS SENSORIMOTOR MODEL</p>
+              <p class="eyebrow">2-AXIS SENSORIMOTOR MODEL</p>
               <h2>Ten-gate flight episode</h2>
               <p>A 48 × 27 camera image drives horizontal and vertical motor activity. Gate outcomes provide delayed dopamine-like feedback.</p>
               <button id="start-button" type="button">Run episode</button>
@@ -99,18 +99,30 @@
       <section class="control-panel">
         <div class="control-copy">
           <h2>Closed-loop 3D neural replay</h2>
-          <p>The game camera is reduced to a tiny retinal image. Four visual channels drive two motor axes; rewards only change action preferences after the fly acts.</p>
+          <p>The game camera is reduced to a tiny retinal image. Four visual channels drive two motor axes; rewards only change action preferences after the fly acts. Each episode varies the ring layout so the controller cannot simply memorize one route.</p>
         </div>
         <div class="control-list" aria-label="Neural replay information">
           <span>48 × 27 camera image supplies visual activity</span>
           <span>Independent horizontal and vertical exploration</span>
           <span>Positive ring reward updates action preferences</span>
+          <span>Episode-specific ring layouts discourage route memorization</span>
           <span>Front-limb activity triggers firing</span>
           <span>NeuroMechFly-derived scanned body mesh</span>
         </div>
         <div class="button-row">
           <button id="run-button" type="button">Run episode</button>
           <button id="reset-learning" class="secondary" type="button">Reset learning</button>
+        </div>
+        <div class="training-jump">
+          <div>
+            <strong>FAST-FORWARD TRAINING</strong>
+            <small>Simulate complete episodes, then inspect the learned policy on the next run.</small>
+          </div>
+          <div class="button-row compact">
+            <button id="skip-5" class="secondary" type="button">Skip 5</button>
+            <button id="skip-10" class="secondary" type="button">Skip 10</button>
+            <button id="skip-25" class="secondary" type="button">Skip 25</button>
+          </div>
         </div>
       </section>
 
