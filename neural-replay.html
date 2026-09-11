@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Neural replay prototype with a two-dimensional course and a Three.js fly body." />
-    <title>Forward Course · Neural Replay v1</title>
+    <meta name="description" content="Closed-loop fruit-fly sensorimotor flight experiment with a NeuroMechFly-derived body." />
+    <title>Fly Sensorimotor Flight Lab</title>
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="neural-replay.css" />
   </head>
@@ -12,11 +12,11 @@
     <main class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">FORWARD COURSE / NEURAL REPLAY</p>
-          <h1>Neural Replay v1</h1>
+          <p class="eyebrow">FORWARD FLIGHT / SENSORIMOTOR REPLAY</p>
+          <h1>Fly Sensorimotor Flight Lab</h1>
         </div>
         <div class="status-cluster" aria-live="polite">
-          <span>LEVEL 1 · TEN RINGS</span>
+          <span>COURSE 02 · TEN 3D GATES</span>
           <span id="status-label">READY</span>
         </div>
       </header>
@@ -24,15 +24,15 @@
       <section class="pipeline-strip" aria-label="Closed-loop sensorimotor pipeline">
         <div><span>01</span><strong>GAME CAMERA</strong><small>Rendered world</small></div>
         <div><span>02</span><strong>RETINA</strong><small>48 × 27 pixels</small></div>
-        <div><span>03</span><strong>VISUAL ACTIVITY</strong><small>Left / right channels</small></div>
-        <div><span>04</span><strong>MOTOR ACTIVITY</strong><small>Choice + spontaneous drive</small></div>
+        <div><span>03</span><strong>VISUAL ACTIVITY</strong><small>Left / right / up / down</small></div>
+        <div><span>04</span><strong>MOTOR ACTIVITY</strong><small>2-axis choice + spontaneous drive</small></div>
         <div><span>05</span><strong>BODY + REWARD</strong><small>Motion closes the loop</small></div>
       </section>
 
       <section class="dual-view" aria-label="Game and three-dimensional fly view">
         <div class="panel game-panel">
           <div class="panel-heading">
-            <span>GAME VIEW</span>
+            <span>FORWARD FLIGHT CAMERA</span>
             <span id="episode-label">EPISODE 0</span>
           </div>
           <div class="game-frame">
@@ -45,9 +45,9 @@
               <span id="message-label">REPLAY READY</span>
             </div>
             <div id="start-card" class="start-card">
-              <p class="eyebrow">RETINAL SENSORIMOTOR MODEL</p>
-              <h2>Ten-ring closed-loop run</h2>
-              <p>A 48 × 27 camera image drives visual and motor activity. Ring outcomes provide delayed dopamine-like feedback.</p>
+              <p class="eyebrow">UNTRAINED 2-AXIS SENSORIMOTOR MODEL</p>
+              <h2>Ten-gate flight episode</h2>
+              <p>A 48 × 27 camera image drives horizontal and vertical motor activity. Gate outcomes provide delayed dopamine-like feedback.</p>
               <button id="start-button" type="button">Run episode</button>
             </div>
           </div>
@@ -62,16 +62,26 @@
 
         <div class="panel fly-panel">
           <div class="panel-heading">
-            <span>THREE.JS FLY MOTION</span>
-            <span id="action-label">MOVE 0.00</span>
+            <span>NEUROMECHFLY BODY + ACTIVITY</span>
+            <span id="action-label">X 0.00 · Y 0.00</span>
           </div>
           <div id="fly-view" class="fly-view" aria-label="Three-dimensional fly body view"></div>
+          <div class="activity-legend" aria-label="Schematic neural activity legend">
+            <span><i class="legend-visual"></i>VISUAL</span>
+            <span><i class="legend-motor"></i>DESCENDING / MOTOR</span>
+            <span><i class="legend-reward"></i>DOPAMINE-LIKE</span>
+            <small>Locations are schematic overlays, not reconstructed neurons.</small>
+          </div>
           <div class="neural-readout" aria-live="polite">
             <div class="readout-heading"><span>NEURAL ACTIVITY</span><span id="reward-label">REWARD 0.00</span></div>
             <div class="neuron-row"><span>VISUAL L</span><div class="neuron-track"><i id="visual-left"></i></div></div>
             <div class="neuron-row"><span>VISUAL R</span><div class="neuron-track"><i id="visual-right"></i></div></div>
+            <div class="neuron-row"><span>VISUAL UP</span><div class="neuron-track"><i id="visual-up"></i></div></div>
+            <div class="neuron-row"><span>VISUAL DOWN</span><div class="neuron-track"><i id="visual-down"></i></div></div>
             <div class="neuron-row"><span>MOTOR L</span><div class="neuron-track"><i id="motor-left"></i></div></div>
             <div class="neuron-row"><span>MOTOR R</span><div class="neuron-track"><i id="motor-right"></i></div></div>
+            <div class="neuron-row"><span>MOTOR UP</span><div class="neuron-track"><i id="motor-up"></i></div></div>
+            <div class="neuron-row"><span>MOTOR DOWN</span><div class="neuron-track"><i id="motor-down"></i></div></div>
             <div class="neuron-row"><span>SPONT. DRIVE</span><div class="neuron-track spontaneous-track"><i id="spontaneous-drive"></i></div></div>
             <div class="neuron-row"><span>FRONT LIMB</span><div class="neuron-track limb-track"><i id="front-limb"></i></div></div>
             <div class="neuron-row"><span>DOPAMINE</span><div class="neuron-track dopamine-track"><i id="dopamine"></i></div></div>
@@ -82,15 +92,15 @@
 
       <section class="control-panel">
         <div class="control-copy">
-          <h2>Closed-loop neural replay</h2>
-          <p>The game camera is reduced to a tiny retinal image. Visual activity from that image drives motor activity; rewards only change action preferences after the fly acts.</p>
+          <h2>Closed-loop 3D neural replay</h2>
+          <p>The game camera is reduced to a tiny retinal image. Four visual channels drive two motor axes; rewards only change action preferences after the fly acts.</p>
         </div>
         <div class="control-list" aria-label="Neural replay information">
           <span>48 × 27 camera image supplies visual activity</span>
-          <span>Slow spontaneous activity prevents one-sided motor lock</span>
+          <span>Independent horizontal and vertical exploration</span>
           <span>Positive ring reward updates action preferences</span>
           <span>Front-limb activity triggers firing</span>
-          <span>Three.js body emphasizes neural motion only</span>
+          <span>NeuroMechFly-derived scanned body mesh</span>
         </div>
         <div class="button-row">
           <button id="run-button" type="button">Run episode</button>
@@ -100,10 +110,11 @@
 
       <footer>
         <span>Neural replay v1 · dopamine-style reward scaffold · no full connectome attached</span>
-        <span>Transparent browser research prototype</span>
+        <span>NeuroMechFly body · schematic activity overlay</span>
       </footer>
     </main>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
     <script src="neural-replay.js"></script>
   </body>
 </html>
