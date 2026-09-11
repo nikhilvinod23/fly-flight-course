@@ -52,3 +52,11 @@ The `neural-replay-v1` branch adds `neural-replay.html`, a closed-loop browser p
 The controller reads only the downsampled rendered image for horizontal/vertical steering and firing; game coordinates are retained for collision and reward bookkeeping. The retinal salience channels, action-selection circuit, neural-location overlay, and flight animation remain educational approximations rather than validated predictions from the full fly connectome.
 
 The 3D panel uses the simplified NeuroMechFly v2 mesh and rigging assets vendored by Xenova's Neural Canvas project. See `assets/neuromechfly/NOTICE` for source and license attribution. If those meshes or the browser STL loader cannot be loaded, the display falls back to the earlier procedural fly.
+
+## GitHub Pages
+
+The `neural-replay-v1` branch includes a GitHub Actions Pages deployment workflow. Once the workflow finishes, the replay is available at:
+
+`https://nikhilvinod23.github.io/fly-flight-course/neural-replay.html`
+
+The footer links to `limitations.html`, which explains the construction, the schematic brain map, and the boundaries of the experiment.

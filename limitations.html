@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Construction notes and limitations for the Fly Sensorimotor Flight Lab." />
+    <title>Experiment Limits · Fly Sensorimotor Flight Lab</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="limitations.css" />
+  </head>
+  <body>
+    <main class="notes-shell">
+      <header class="notes-header">
+        <p class="eyebrow">FLY SENSORIMOTOR FLIGHT LAB</p>
+        <h1>Construction &amp; limitations</h1>
+        <p>This page explains what the browser experiment represents, what it leaves out, and how the current demonstration can grow toward a more biological model.</p>
+      </header>
+
+      <section class="notes-grid">
+        <article>
+          <p class="note-index">01 / CONSTRUCTION</p>
+          <h2>What the replay does</h2>
+          <p>The game renders a forward flight course. Each frame is reduced to a small 48 × 27 image that stands in for a fly-facing visual sensor. Left, right, up, and down activity channels drive exploratory motor preferences. Ring and target outcomes provide delayed positive or negative reward.</p>
+          <p>The 3D body is a browser display based on simplified NeuroMechFly body meshes. The small brain panel is a low-cost 3D activity map with grouped visual, motor, front-limb, and dopamine-like nodes.</p>
+        </article>
+        <article>
+          <p class="note-index">02 / LIMITS</p>
+          <h2>What it does not claim</h2>
+          <ul>
+            <li>It is not a full Drosophila connectome simulation.</li>
+            <li>The four visual channels are aggregated signals, not individual ommatidia or reconstructed visual neurons.</li>
+            <li>The brain activity locations are schematic overlays, not measured firing locations.</li>
+            <li>The reward table is a toy reinforcement-learning scaffold, not demonstrated biological dopamine plasticity.</li>
+            <li>The body animation has no aerodynamic, muscle, contact, or wingbeat physics.</li>
+            <li>The body and brain references combine assets from different fly datasets and should not be interpreted as one exact individual.</li>
+          </ul>
+        </article>
+        <article>
+          <p class="note-index">03 / NEXT LAYER</p>
+          <h2>What would make it more authentic</h2>
+          <p>A stronger experiment would map retinal samples onto selected visual neurons, propagate activity through a curated visual-to-descending pathway, and drive the game from recorded or simulated motor outputs. A browser-friendly version should use a carefully selected subset of neurons and cache only the geometry needed for display.</p>
+          <p>The full connectome is better suited to an offline or server-side simulation, with the website receiving compact activity traces and replaying them alongside the retinal image.</p>
+        </article>
+      </section>
+
+      <section class="source-box">
+        <h2>Sources and attribution</h2>
+        <p><a href="https://neuromechfly.org/">NeuroMechFly / FlyGym</a> documents the biomechanical fly model, compound-eye inputs, hierarchical brain/VNC control, and mechanosensory interfaces.</p>
+        <p><a href="https://male-cns.janelia.org/">MaleCNS</a> provides connectome annotations, neuron skeletons, synapses, and connectivity data. Its full tables are far too large for this lightweight browser demonstration.</p>
+        <p>The browser body assets are included with attribution in <a href="assets/neuromechfly/NOTICE">assets/neuromechfly/NOTICE</a>.</p>
+      </section>
+
+      <footer>
+        <a href="neural-replay.html">← Return to the neural replay</a>
+        <span>Transparent browser research prototype</span>
+      </footer>
+    </main>
+  </body>
+</html>

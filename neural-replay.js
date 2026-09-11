@@ -6,6 +6,7 @@
   const ctx = canvas.getContext("2d");
   const retinaCanvas = document.getElementById("retina-preview");
   const retinaCtx = retinaCanvas.getContext("2d", { willReadFrequently: true });
+  const brainView = document.getElementById("brain-view");
   const flyView = document.getElementById("fly-view");
   const ui = {
     status: document.getElementById("status-label"), episode: document.getElementById("episode-label"),
@@ -87,7 +88,8 @@
 
   const three = {
     renderer: null, scene: null, camera: null, fly: null, fallback: null,
-    frontLegs: [], wings: [], segmentNodes: {}, activityNodes: [], clock: 0, modelReady: false
+    frontLegs: [], wings: [], segmentNodes: {}, activityNodes: [], clock: 0, modelReady: false,
+    brainRenderer: null, brainScene: null, brainCamera: null, brain: null, brainNodes: []
   };
 
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -669,6 +671,79 @@
     return body;
   }
 
+  function createBrainPreview() {
+    three.brainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "low-power" });
+    three.brainRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+    three.brainRenderer.setClearColor(0x030914, 1);
+    brainView.appendChild(three.brainRenderer.domElement);
+    three.brainScene = new THREE.Scene();
+    three.brainCamera = new THREE.PerspectiveCamera(34, 1, 0.1, 20);
+    three.brainCamera.position.set(2.7, -4.8, 2.1);
+    three.brainCamera.lookAt(0, 0, 0.05);
+    three.brainScene.add(new THREE.HemisphereLight(0x9fd9ef, 0x17202c, 1.1));
+    const brainKey = new THREE.DirectionalLight(0xffffff, 0.8);
+    brainKey.position.set(-2, -3, 4);
+    three.brainScene.add(brainKey);
+
+    three.brain = new THREE.Group();
+    const lobeMaterial = new THREE.MeshStandardMaterial({ color: 0x6b829b, roughness: 0.9, metalness: 0, transparent: true, opacity: 0.38, wireframe: true });
+    [-1, 1].forEach((side) => {
+      const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.82, 16, 10), lobeMaterial);
+      lobe.scale.set(0.78, 0.68, 0.92);
+      lobe.position.set(side * 0.48, 0, 0.08);
+      three.brain.add(lobe);
+    });
+    const bridge = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 8), new THREE.MeshStandardMaterial({ color: 0x41576c, transparent: true, opacity: 0.58 }));
+    bridge.scale.set(0.9, 1.3, 0.8);
+    bridge.position.set(0, 0.02, -0.02);
+    three.brain.add(bridge);
+
+    const nodeSpecs = [
+      ["visualLeft", 0x42c7ef, [-0.72, -0.24, 0.3]], ["visualRight", 0x42c7ef, [0.72, -0.24, 0.3]],
+      ["visualUp", 0x42c7ef, [-0.34, 0.02, 0.64]], ["visualDown", 0x42c7ef, [0.34, 0.02, -0.38]],
+      ["motorLeft", 0xf2aa45, [-0.35, 0.22, -0.2]], ["motorRight", 0xf2aa45, [0.35, 0.22, -0.2]],
+      ["motorUp", 0xf2aa45, [-0.2, 0.32, 0.25]], ["motorDown", 0xf2aa45, [0.2, 0.32, -0.45]],
+      ["frontLimb", 0xb08bf0, [0, 0.52, -0.02]], ["dopamine", 0x64df90, [0, -0.2, 0.45]]
+    ];
+    for (const [key, color, position] of nodeSpecs) {
+      const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.24, depthTest: false });
+      const node = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), material);
+      node.position.set(...position);
+      node.renderOrder = 4;
+      three.brain.add(node);
+      three.brainNodes.push({ key, node });
+    }
+    const pathwayMaterial = new THREE.LineBasicMaterial({ color: 0x355974, transparent: true, opacity: 0.65 });
+    const pathwayPoints = [
+      new THREE.Vector3(-0.72, -0.24, 0.3), new THREE.Vector3(-0.34, 0.02, 0.64), new THREE.Vector3(0, 0.02, 0.08),
+      new THREE.Vector3(0.34, 0.02, -0.38), new THREE.Vector3(0.72, -0.24, 0.3)
+    ];
+    three.brain.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pathwayPoints), pathwayMaterial));
+    three.brainScene.add(three.brain);
+    resizeBrain();
+  }
+
+  function resizeBrain() {
+    if (!three.brainRenderer) return;
+    const rect = brainView.getBoundingClientRect();
+    three.brainRenderer.setSize(rect.width, rect.height, false);
+    three.brainCamera.aspect = rect.width / rect.height;
+    three.brainCamera.updateProjectionMatrix();
+  }
+
+  function updateBrainPreview() {
+    if (!three.brainRenderer || !three.brain) return;
+    three.brain.rotation.y = Math.sin(three.clock * 0.5) * 0.18;
+    three.brain.rotation.x = Math.sin(three.clock * 0.35) * 0.05;
+    const centralActivity = clamp((Math.abs(neural.moveX) + Math.abs(neural.moveY)) * 0.5, 0, 1);
+    three.brainNodes.forEach(({ key, node }) => {
+      const activity = key === "dopamine" ? neural.dopamine : key === "frontLimb" ? neural.frontLimb : key === "central" ? centralActivity : clamp(neural[key] || 0, 0, 1);
+      node.scale.setScalar(0.45 + activity * 1.6);
+      node.material.opacity = 0.2 + activity * 0.8;
+    });
+    three.brainRenderer.render(three.brainScene, three.brainCamera);
+  }
+
   function initThree() {
     three.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "low-power" });
     three.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
@@ -684,6 +759,7 @@
     const rim = new THREE.DirectionalLight(0x5bc2e7, 0.38); rim.position.set(4, 5, 2); three.scene.add(rim);
     const grid = new THREE.GridHelper(12, 18, 0x2e6683, 0x173149);
     grid.rotation.x = Math.PI / 2; grid.position.z = -1.25; three.scene.add(grid);
+    createBrainPreview();
     three.fallback = createProceduralFly();
     addActivityOverlay(three.fallback);
     three.fly = three.fallback;
@@ -701,11 +777,13 @@
   }
 
   function resizeThree() {
-    if (!three.renderer) return;
-    const rect = flyView.getBoundingClientRect();
-    three.renderer.setSize(rect.width, rect.height, false);
-    three.camera.aspect = rect.width / rect.height;
-    three.camera.updateProjectionMatrix();
+    if (three.renderer) {
+      const rect = flyView.getBoundingClientRect();
+      three.renderer.setSize(rect.width, rect.height, false);
+      three.camera.aspect = rect.width / rect.height;
+      three.camera.updateProjectionMatrix();
+    }
+    resizeBrain();
   }
 
   function neuralValue(key) { return neural[key] || 0; }
@@ -734,10 +812,12 @@
       node.material.opacity = 0.2 + activity * 0.8;
     });
     three.renderer.render(three.scene, three.camera);
+    updateBrainPreview();
   }
 
   function showThreeFallback() {
     flyView.innerHTML = "<div class=\"fly-fallback\"><strong>3D preview unavailable</strong><span>The replay remains active. A WebGL-capable browser will show the NeuroMechFly body here.</span></div>";
+    brainView.innerHTML = "<div class=\"fly-fallback\"><strong>Brain preview unavailable</strong></div>";
   }
 
   function loadThree() {
