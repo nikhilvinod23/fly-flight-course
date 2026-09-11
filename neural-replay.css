@@ -2,7 +2,12 @@
 .panel { min-width: 0; border: 2px solid var(--ink); background: var(--panel); }
 .panel-heading { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.75rem; border-bottom: 2px solid var(--ink); color: var(--muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; }
 .game-panel .game-frame { margin: 0; border: 0; }
-.game-panel canvas { height: min(58vh, 580px); min-height: 420px; }
+.game-panel .game-frame > canvas { height: min(58vh, 580px); min-height: 420px; }
+.retina-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.7rem 0.75rem; border-top: 2px solid var(--ink); background: var(--paper); }
+.retina-row > div { display: grid; gap: 0.2rem; }
+.retina-label { color: var(--muted); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; }
+.retina-row small { color: var(--muted); font-size: 0.72rem; }
+.retina-row canvas { width: 192px; height: 108px; min-height: 0; image-rendering: pixelated; border: 1px solid var(--ink); background: #d7e4e9; }
 .fly-view { height: min(58vh, 580px); min-height: 420px; background: #d7e4e9; }
 .fly-view canvas { width: 100%; height: 100%; display: block; }
 .fly-fallback { display: grid; place-content: center; gap: 0.5rem; height: 100%; padding: 2rem; color: var(--muted); text-align: center; }
@@ -18,5 +23,5 @@
 
 @media (max-width: 900px) {
   .dual-view { grid-template-columns: 1fr; }
-  .game-panel canvas, .fly-view { height: 58vh; min-height: 360px; }
+  .game-panel .game-frame > canvas, .fly-view { height: 58vh; min-height: 360px; }
 }

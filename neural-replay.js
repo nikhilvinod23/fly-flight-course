@@ -5,6 +5,8 @@
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
+  const retinaCanvas = document.getElementById("retina-preview");
+  const retinaCtx = retinaCanvas.getContext("2d", { willReadFrequently: true });
   const flyView = document.getElementById("fly-view");
   const ui = {
     status: document.getElementById("status-label"),
@@ -39,6 +41,8 @@
   const BULLET_SPEED = 920;
   const RING_SPACING = 650;
   const LEARNING_RATE = 0.08;
+  const RETINA_WIDTH = 48;
+  const RETINA_HEIGHT = 27;
 
   const ringX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
   const ringAngles = [-0.18, 0.52, -0.86, 0.28, 1.12, -0.42, 0.74, -1.02, 0.36, -0.64];
@@ -63,6 +67,7 @@
   let preferences = ACTIONS.map(() => ACTIONS.map(() => 0));
   let eligibility = ACTIONS.map(() => 0);
   let sensorySeed = 0x4f1bbcdc;
+  let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   const neural = {
     visualLeft: 0,
     visualRight: 0,
@@ -107,9 +112,11 @@
     neural.fireCooldown = 0;
     neural.decisionTimer = 0;
     sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
+    previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
     rings.forEach((ring) => { ring.result = null; });
     syncUI();
     drawGame();
+    updateRetinaFromCamera();
     updateThree();
   }
 
@@ -137,33 +144,44 @@
     return { x: width / 2 + (x - player.x) * scale, y: height / 2 + y * scale, scale, depth };
   }
 
-  function sampleVisualObject(object, size, maxDepth) {
-    const depth = object.z - player.z;
-    if (depth <= 70 || depth >= maxDepth) return { left: 0, right: 0, center: 0, strength: 0 };
-    const projected = project(object.x, object.y || 0, object.z);
-    const screenCenter = clamp((projected.x - width / 2) / (width * 0.5), -1, 1);
-    const apparentSize = clamp(size * projected.scale / Math.max(width * 0.34, 1), 0, 1);
-    const depthStrength = clamp(1 - depth / maxDepth, 0, 1);
-    const strength = clamp((0.28 + apparentSize * 1.9) * depthStrength, 0, 1);
-    const left = strength * clamp(0.5 - screenCenter * 0.5, 0, 1) + sensoryNoise(0.045);
-    const right = strength * clamp(0.5 + screenCenter * 0.5, 0, 1) + sensoryNoise(0.045);
-    return {
-      left: clamp(left, 0, 1),
-      right: clamp(right, 0, 1),
-      center: 1 - Math.abs(screenCenter),
-      strength
-    };
-  }
+  function updateRetinaFromCamera() {
+    retinaCtx.imageSmoothingEnabled = false;
+    retinaCtx.clearRect(0, 0, RETINA_WIDTH, RETINA_HEIGHT);
+    retinaCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, RETINA_WIDTH, RETINA_HEIGHT);
+    const pixels = retinaCtx.getImageData(0, 0, RETINA_WIDTH, RETINA_HEIGHT).data;
+    const columns = new Array(RETINA_WIDTH).fill(0);
+    const targetColumns = new Array(RETINA_WIDTH).fill(0);
 
-  function sampleRingVision(ring) {
-    const visual = sampleVisualObject(ring, RING_RADIUS, 2400);
-    const orientationVisibility = 0.76 + Math.abs(Math.cos(ring.angle)) * 0.24;
-    return {
-      left: clamp(visual.left * orientationVisibility, 0, 1),
-      right: clamp(visual.right * orientationVisibility, 0, 1),
-      center: visual.center,
-      strength: visual.strength * orientationVisibility
-    };
+    for (let y = 3; y < RETINA_HEIGHT - 4; y += 1) {
+      for (let x = 0; x < RETINA_WIDTH; x += 1) {
+        const pixel = (y * RETINA_WIDTH + x) * 4;
+        const red = pixels[pixel] / 255;
+        const green = pixels[pixel + 1] / 255;
+        const blue = pixels[pixel + 2] / 255;
+        const luminance = (red + green + blue) / 3;
+        const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
+        const salience = clamp(chroma * 2.1 + Math.abs(luminance - 0.82) * 0.55, 0, 1);
+        columns[x] += salience;
+        if (blue > red * 1.25 && blue > green * 1.8) targetColumns[x] += 1;
+      }
+    }
+
+    const rowCount = RETINA_HEIGHT - 7;
+    const smoothedColumns = columns.map((value, index) => {
+      const current = value / rowCount;
+      const motion = Math.abs(current - previousRetinaColumns[index]);
+      return clamp(current * 0.82 + motion * 0.18 + sensoryNoise(0.012), 0, 1);
+    });
+    previousRetinaColumns = smoothedColumns;
+
+    const half = RETINA_WIDTH / 2;
+    const left = smoothedColumns.slice(0, half).reduce((sum, value) => sum + value, 0) / half;
+    const right = smoothedColumns.slice(half).reduce((sum, value) => sum + value, 0) / half;
+    const centerStart = Math.floor(RETINA_WIDTH * 0.36);
+    const centerEnd = Math.ceil(RETINA_WIDTH * 0.64);
+    const center = smoothedColumns.slice(centerStart, centerEnd).reduce((sum, value) => sum + value, 0) / (centerEnd - centerStart);
+    const targetCenter = targetColumns.slice(centerStart, centerEnd).reduce((sum, value) => sum + value, 0) / ((centerEnd - centerStart) * rowCount);
+    return { left: clamp(left * 2.2, 0, 1), right: clamp(right * 2.2, 0, 1), center: clamp(center * 2.2, 0, 1), targetCenter: clamp(targetCenter * 1.8, 0, 1) };
   }
 
   function selectAction(visualDifference) {
@@ -180,10 +198,9 @@
   }
 
   function buildNeuralController(dt) {
-    const ring = rings[nextRingIndex] || rings[rings.length - 1];
-    const ringVision = sampleRingVision(ring);
-    neural.visualLeft = lerp(neural.visualLeft, ringVision.left, 1 - Math.exp(-dt * 12));
-    neural.visualRight = lerp(neural.visualRight, ringVision.right, 1 - Math.exp(-dt * 12));
+    const retinalInput = updateRetinaFromCamera();
+    neural.visualLeft = lerp(neural.visualLeft, retinalInput.left, 1 - Math.exp(-dt * 12));
+    neural.visualRight = lerp(neural.visualRight, retinalInput.right, 1 - Math.exp(-dt * 12));
     const visualDifference = clamp(neural.visualRight - neural.visualLeft, -1, 1);
     neural.context = clamp(Math.round(visualDifference * 2) + 2, 0, 4);
 
@@ -204,10 +221,9 @@
     const target = targets[nextTargetIndex];
     if (target && !target.hit && !target.missed) {
       const targetDepth = target.z - player.z;
-      const targetVision = sampleVisualObject(target, TARGET_HIT_RADIUS, 900);
-      const targetVisual = clamp(Math.min(targetVision.left, targetVision.right) * 2.1 * targetVision.center, 0, 1);
+      const targetVisual = retinalInput.targetCenter * retinalInput.center;
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
-      if (targetVisual > 0.68 && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 430) fire();
+      if (targetVisual > 0.42 && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 430) fire();
     } else {
       neural.frontLimb = lerp(neural.frontLimb, 0, 1 - Math.exp(-dt * 12));
     }
@@ -494,7 +510,9 @@
     if (!three.renderer) return;
     const flyX = player.x / 130;
     three.fly.position.set(flyX, -0.15 + Math.sin(three.clock * 5) * 0.05, 0);
-    three.fly.rotation.z = -neural.moveX * 0.32;
+    // Local +X is the fly's right; positive game movement is screen-right.
+    // Keep the visible roll on the same side as the fly's own turn.
+    three.fly.rotation.z = neural.moveX * 0.32;
     three.fly.rotation.x = -neural.moveX * 0.08 + Math.sin(three.clock * 3.2) * 0.025;
     three.fly.rotation.y = Math.sin(three.clock * 2.4) * 0.04;
     three.frontLegs.forEach((leg, index) => { leg.rotation.z = (index === 0 ? -1 : 1) * (0.12 + neural.frontLimb * 0.95); });
