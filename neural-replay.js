@@ -6,6 +6,8 @@
   const ctx = canvas.getContext("2d");
   const retinaCanvas = document.getElementById("retina-preview");
   const retinaCtx = retinaCanvas.getContext("2d", { willReadFrequently: true });
+  const trainingCanvas = document.getElementById("training-graph");
+  const trainingCtx = trainingCanvas.getContext("2d");
   const brainView = document.getElementById("brain-view");
   const flyView = document.getElementById("fly-view");
   const ui = {
@@ -15,6 +17,7 @@
     start: document.getElementById("start-button"), run: document.getElementById("run-button"),
     resetLearning: document.getElementById("reset-learning"), skip5: document.getElementById("skip-5"),
     skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), action: document.getElementById("action-label"),
+    graphSummary: document.getElementById("graph-summary"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
     visualLeft: document.getElementById("visual-left"), visualRight: document.getElementById("visual-right"),
     visualUp: document.getElementById("visual-up"), visualDown: document.getElementById("visual-down"),
@@ -46,6 +49,7 @@
   const FAST_FORWARD_DT = 1 / 30;
   const FAST_FORWARD_CHUNK = 60;
   const MAX_RECENT_EPISODES = 10;
+  const MAX_STORED_EPISODES = 500;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
 
@@ -185,6 +189,7 @@
     targetHistory = [];
     episode = 0;
     resetEpisode();
+    drawTrainingGraph();
     ui.learning.textContent = "Preferences are untrained. The fly is exploring in two axes.";
   }
 
@@ -365,6 +370,86 @@
     ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)}.`;
   }
 
+  function drawTrainingGraph() {
+    if (!trainingCanvas || !trainingCtx) return;
+    const rect = trainingCanvas.getBoundingClientRect();
+    const cssWidth = Math.max(280, rect.width || 720);
+    const cssHeight = 190;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    trainingCanvas.width = Math.floor(cssWidth * ratio);
+    trainingCanvas.height = Math.floor(cssHeight * ratio);
+    trainingCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    trainingCtx.clearRect(0, 0, cssWidth, cssHeight);
+
+    const padding = { left: 32, right: 34, top: 16, bottom: 24 };
+    const plotWidth = cssWidth - padding.left - padding.right;
+    const plotHeight = cssHeight - padding.top - padding.bottom;
+    const start = Math.max(0, ringHistory.length - 60);
+    const count = Math.max(1, ringHistory.length - start);
+    const xFor = (index) => padding.left + (count === 1 ? plotWidth * 0.5 : (index / (count - 1)) * plotWidth);
+    const yFor = (value, max) => padding.top + plotHeight - clamp(value / max, 0, 1) * plotHeight;
+
+    trainingCtx.fillStyle = "#030914";
+    trainingCtx.fillRect(0, 0, cssWidth, cssHeight);
+    trainingCtx.font = "10px Arial";
+    trainingCtx.textBaseline = "middle";
+    trainingCtx.lineWidth = 1;
+    for (let tick = 0; tick <= 5; tick += 1) {
+      const y = padding.top + plotHeight - (tick / 5) * plotHeight;
+      trainingCtx.strokeStyle = "#1a334a";
+      trainingCtx.beginPath();
+      trainingCtx.moveTo(padding.left, y);
+      trainingCtx.lineTo(cssWidth - padding.right, y);
+      trainingCtx.stroke();
+      trainingCtx.fillStyle = "#71869b";
+      trainingCtx.textAlign = "right";
+      trainingCtx.fillText(String(tick * 2), padding.left - 7, y);
+      trainingCtx.textAlign = "left";
+      trainingCtx.fillText(((tick / 5) * 2).toFixed(1).replace(".0", ""), cssWidth - padding.right + 7, y);
+    }
+    trainingCtx.fillStyle = "#71869b";
+    trainingCtx.textAlign = "left";
+    trainingCtx.fillText("RINGS", 5, 8);
+    trainingCtx.textAlign = "right";
+    trainingCtx.fillText("SHOTS", cssWidth - 5, 8);
+    if (ringHistory.length) {
+      trainingCtx.textAlign = "left";
+      trainingCtx.fillText(`EP ${start + 1}`, padding.left, cssHeight - 9);
+      trainingCtx.textAlign = "right";
+      trainingCtx.fillText(`EP ${ringHistory.length}`, cssWidth - padding.right, cssHeight - 9);
+    } else {
+      trainingCtx.textAlign = "center";
+      trainingCtx.fillStyle = "#71869b";
+      trainingCtx.fillText("Run or fast-forward an episode to populate the graph", cssWidth * 0.5, padding.top + plotHeight * 0.5);
+    }
+
+    const drawSeries = (values, max, color) => {
+      if (!values.length) return;
+      trainingCtx.strokeStyle = color;
+      trainingCtx.fillStyle = color;
+      trainingCtx.lineWidth = 2;
+      trainingCtx.beginPath();
+      values.slice(start).forEach((value, index) => {
+        const x = xFor(index);
+        const y = yFor(value, max);
+        if (index === 0) trainingCtx.moveTo(x, y); else trainingCtx.lineTo(x, y);
+      });
+      trainingCtx.stroke();
+      values.slice(start).forEach((value, index) => {
+        trainingCtx.beginPath();
+        trainingCtx.arc(xFor(index), yFor(value, max), 2.5, 0, Math.PI * 2);
+        trainingCtx.fill();
+      });
+    };
+    drawSeries(ringHistory, 10, "#58d68d");
+    drawSeries(targetHistory, 2, "#f1ad45");
+    if (ui.graphSummary) {
+      const lastRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
+      const lastShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
+      ui.graphSummary.textContent = ringHistory.length ? `${ringHistory.length} EPISODES · LAST ${lastRings}/10 RINGS · ${lastShots}/2 SHOTS` : "NO COMPLETED EPISODES";
+    }
+  }
+
   function applyMovementReward(rewardX, rewardY, color = null) {
     const deltaX = rewardX - movementBaselineX;
     const deltaY = rewardY - movementBaselineY;
@@ -467,8 +552,9 @@
     episodeRecorded = true;
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
-    if (ringHistory.length > MAX_RECENT_EPISODES) ringHistory.shift();
-    if (targetHistory.length > MAX_RECENT_EPISODES) targetHistory.shift();
+    if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();
+    if (targetHistory.length > MAX_STORED_EPISODES) targetHistory.shift();
+    drawTrainingGraph();
     updateLearningReadout();
   }
 
@@ -1046,7 +1132,7 @@
     if (running) requestAnimationFrame(loop);
   }
 
-  window.addEventListener("resize", () => { resizeGame(); resizeThree(); drawGame(); updateThree(); });
+  window.addEventListener("resize", () => { resizeGame(); resizeThree(); drawGame(); updateThree(); drawTrainingGraph(); });
   ui.start.addEventListener("click", startEpisode);
   ui.run.addEventListener("click", startEpisode);
   ui.resetLearning.addEventListener("click", resetLearning);
@@ -1058,5 +1144,6 @@
   resetEpisode();
   drawGame();
   syncUI();
+  drawTrainingGraph();
   loadThree();
 })();
