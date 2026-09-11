@@ -21,7 +21,7 @@
           <p class="note-index">01 / CONSTRUCTION</p>
           <h2>What the replay does</h2>
           <p>The game renders a forward flight course. Each frame is reduced to a small 48 × 27 image that stands in for a fly-facing visual sensor. Left, right, up, and down activity channels drive exploratory motor preferences. Ring and target outcomes provide delayed positive or negative reward.</p>
-          <p>The 3D body is a browser display based on simplified NeuroMechFly body meshes. The small brain panel is a low-cost 3D activity map with grouped visual, motor, front-limb, and dopamine-like nodes.</p>
+          <p>The 3D body is a browser display based on simplified NeuroMechFly body meshes. The small brain panel now uses the low-poly JRC2018U adult Drosophila atlas surface, with grouped visual, motor, front-limb, and dopamine-like activity markers layered on top.</p>
         </article>
         <article>
           <p class="note-index">02 / LIMITS</p>
@@ -29,7 +29,7 @@
           <ul>
             <li>It is not a full Drosophila connectome simulation.</li>
             <li>The four visual channels are aggregated signals, not individual ommatidia or reconstructed visual neurons.</li>
-            <li>The brain activity locations are schematic overlays, not measured firing locations.</li>
+            <li>The JRC2018U surface is an atlas average; the activity locations are still schematic pathway overlays, not measured firing locations.</li>
             <li>The reward table is a toy reinforcement-learning scaffold, not demonstrated biological dopamine plasticity.</li>
             <li>The body animation has no aerodynamic, muscle, contact, or wingbeat physics.</li>
             <li>The body and brain references combine assets from different fly datasets and should not be interpreted as one exact individual.</li>
@@ -48,6 +48,7 @@
         <p><a href="https://neuromechfly.org/">NeuroMechFly / FlyGym</a> documents the biomechanical fly model, compound-eye inputs, hierarchical brain/VNC control, and mechanosensory interfaces.</p>
         <p><a href="https://male-cns.janelia.org/">MaleCNS</a> provides connectome annotations, neuron skeletons, synapses, and connectivity data. Its full tables are far too large for this lightweight browser demonstration.</p>
         <p>The browser body assets are included with attribution in <a href="assets/neuromechfly/NOTICE">assets/neuromechfly/NOTICE</a>.</p>
+        <p>The low-poly brain surface is the JRC2018U template mesh from <a href="https://github.com/navis-org/navis-flybrains">navis-flybrains</a>, included with its GPL-3.0 license in <a href="assets/brain/NAVIS_FLYBRAINS_LICENSE.txt">assets/brain/NAVIS_FLYBRAINS_LICENSE.txt</a>. The template is associated with the JRC2018 atlas documented by <a href="https://www.virtualflybrain.org/docs/data/templates/">Virtual Fly Brain</a>.</p>
       </section>
 
       <footer>

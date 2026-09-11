@@ -1,0 +1,13 @@
+JRC2018U LOW-POLY BRAIN ATLAS SURFACE
+
+The file JRC2018U.ply is redistributed from:
+https://github.com/navis-org/navis-flybrains
+
+The repository's GPL-3.0 license is included as NAVIS_FLYBRAINS_LICENSE.txt.
+The mesh represents the JRC2018U adult Drosophila template brain. Virtual Fly
+Brain documents the atlas and its regions at:
+https://www.virtualflybrain.org/docs/data/templates/
+
+This project adds the browser rendering and the activity overlay. The colored
+activity points are schematic labels for the educational replay and are not
+measured neuron firing coordinates.

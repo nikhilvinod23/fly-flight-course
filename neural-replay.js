@@ -89,7 +89,7 @@
   const three = {
     renderer: null, scene: null, camera: null, fly: null, fallback: null,
     frontLegs: [], wings: [], segmentNodes: {}, activityNodes: [], clock: 0, modelReady: false,
-    brainRenderer: null, brainScene: null, brainCamera: null, brain: null, brainNodes: []
+    brainRenderer: null, brainScene: null, brainCamera: null, brain: null, brainAtlas: null, brainNodes: []
   };
 
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -686,24 +686,20 @@
     three.brainScene.add(brainKey);
 
     three.brain = new THREE.Group();
-    const lobeMaterial = new THREE.MeshStandardMaterial({ color: 0x6b829b, roughness: 0.9, metalness: 0, transparent: true, opacity: 0.38, wireframe: true });
-    [-1, 1].forEach((side) => {
-      const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.82, 16, 10), lobeMaterial);
-      lobe.scale.set(0.78, 0.68, 0.92);
-      lobe.position.set(side * 0.48, 0, 0.08);
-      three.brain.add(lobe);
-    });
-    const bridge = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 8), new THREE.MeshStandardMaterial({ color: 0x41576c, transparent: true, opacity: 0.58 }));
-    bridge.scale.set(0.9, 1.3, 0.8);
-    bridge.position.set(0, 0.02, -0.02);
-    three.brain.add(bridge);
+    three.brain.rotation.order = "YXZ";
+    three.brain.position.y = 0.02;
+
+    // The shell is the low-poly JRC2018U adult Drosophila atlas surface.
+    // Activity markers below are deliberately kept as a small, readable overlay:
+    // they are pathway labels, not a claim that these exact coordinates are firing.
+    loadBrainAtlas();
 
     const nodeSpecs = [
-      ["visualLeft", 0x42c7ef, [-0.72, -0.24, 0.3]], ["visualRight", 0x42c7ef, [0.72, -0.24, 0.3]],
-      ["visualUp", 0x42c7ef, [-0.34, 0.02, 0.64]], ["visualDown", 0x42c7ef, [0.34, 0.02, -0.38]],
-      ["motorLeft", 0xf2aa45, [-0.35, 0.22, -0.2]], ["motorRight", 0xf2aa45, [0.35, 0.22, -0.2]],
-      ["motorUp", 0xf2aa45, [-0.2, 0.32, 0.25]], ["motorDown", 0xf2aa45, [0.2, 0.32, -0.45]],
-      ["frontLimb", 0xb08bf0, [0, 0.52, -0.02]], ["dopamine", 0x64df90, [0, -0.2, 0.45]]
+      ["visualLeft", 0x42c7ef, [-0.72, 0.02, 0.02]], ["visualRight", 0x42c7ef, [0.72, 0.02, 0.02]],
+      ["visualUp", 0x42c7ef, [-0.46, 0.19, 0.32]], ["visualDown", 0x42c7ef, [0.46, 0.06, -0.23]],
+      ["motorLeft", 0xf2aa45, [-0.31, -0.08, -0.08]], ["motorRight", 0xf2aa45, [0.31, -0.08, -0.08]],
+      ["motorUp", 0xf2aa45, [-0.13, 0.12, 0.18]], ["motorDown", 0xf2aa45, [0.13, -0.16, -0.27]],
+      ["frontLimb", 0xb08bf0, [0, -0.35, -0.1]], ["dopamine", 0x64df90, [0, 0.2, 0.38]]
     ];
     for (const [key, color, position] of nodeSpecs) {
       const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.24, depthTest: false });
@@ -721,6 +717,37 @@
     three.brain.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pathwayPoints), pathwayMaterial));
     three.brainScene.add(three.brain);
     resizeBrain();
+  }
+
+  function loadBrainAtlas() {
+    if (!THREE.PLYLoader) return;
+    const loader = new THREE.PLYLoader();
+    loader.load("assets/brain/JRC2018U.ply", (geometry) => {
+      geometry.computeVertexNormals();
+      geometry.center();
+      const size = geometry.boundingBox ? geometry.boundingBox.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+      const longestAxis = Math.max(size.x, size.y, size.z) || 1;
+      geometry.scale(1.62 / longestAxis, 1.62 / longestAxis, 1.62 / longestAxis);
+      const surfaceMaterial = new THREE.MeshStandardMaterial({
+        color: 0x7894aa, roughness: 0.92, metalness: 0, transparent: true, opacity: 0.34,
+        side: THREE.DoubleSide, depthWrite: false, flatShading: true
+      });
+      const wireMaterial = new THREE.MeshBasicMaterial({
+        color: 0xb4d1df, transparent: true, opacity: 0.34, wireframe: true,
+        depthTest: false
+      });
+      const atlas = new THREE.Group();
+      atlas.name = "JRC2018U atlas surface";
+      atlas.add(new THREE.Mesh(geometry, surfaceMaterial));
+      const wire = new THREE.Mesh(geometry, wireMaterial);
+      wire.renderOrder = 2;
+      atlas.add(wire);
+      atlas.rotation.set(THREE.MathUtils.degToRad(-8), THREE.MathUtils.degToRad(4), 0);
+      three.brainAtlas = atlas;
+      three.brain.add(atlas);
+    }, undefined, () => {
+      three.brainAtlas = null;
+    });
   }
 
   function resizeBrain() {
