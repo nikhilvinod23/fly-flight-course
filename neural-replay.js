@@ -51,8 +51,15 @@
   const ACTION_NOISE_FLOOR = 0.05;
   const EXPLORATION_DECAY = 180;
   const CONTEXT_BINS = 9;
-  const POLICY_BIAS_SCALE = 0.28;
-  const VISUAL_STEERING_GAIN = 0.78;
+  const POLICY_BIAS_SCALE = 0.5;
+  const MAX_LEARNED_VISUAL_GAIN = 0.78;
+  const VISUAL_GAIN_SUCCESS_STEP = 0.07;
+  const VISUAL_GAIN_MISS_STEP = 0.006;
+  const EPISODE_BASELINE_MIX = 0.06;
+  const EPISODE_TRACE_SCALE = 0.4;
+  const RECORD_TRACE_BONUS = 0.5;
+  const RECORD_STEERING_GAIN_BONUS = 0.08;
+  const TOP_PERFORMANCE_COUNT = 10;
   const ELIGIBILITY_DECAY = 0.42;
   const BASELINE_MIX = 0.08;
   const PROGRESS_REWARD_SCALE = 0.65;
@@ -103,6 +110,11 @@
   let eligibilityY = null;
   let movementBaselineX = 0;
   let movementBaselineY = 0;
+  let episodeTraceX = freshEligibility();
+  let episodeTraceY = freshEligibility();
+  let episodeScoreBaseline = 0;
+  let topPerformances = [];
+  let learnedVisualGain = 0;
   let firePreference = 0;
   let fireBaseline = 0;
   let fireEligibility = 0;
@@ -197,6 +209,8 @@
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     fireEligibility = 0;
+    episodeTraceX = freshEligibility();
+    episodeTraceY = freshEligibility();
     rings = createRings(episode);
     episodeRingHits = 0;
     episodeRecorded = false;
@@ -220,6 +234,9 @@
     eligibilityY = freshEligibility();
     movementBaselineX = 0;
     movementBaselineY = 0;
+    episodeScoreBaseline = 0;
+    topPerformances = [];
+    learnedVisualGain = 0;
     firePreference = 0;
     fireBaseline = 0;
     fireEligibility = 0;
@@ -339,7 +356,7 @@
     };
   }
 
-  function selectAxisAction(axis, visualDifference, goalError) {
+  function selectAxisAction(axis, goalError) {
     const isX = axis === "x";
     const context = isX ? neural.contextX : neural.contextY;
     const preferences = isX ? preferencesX : preferencesY;
@@ -348,10 +365,10 @@
     let bestIndex = 0;
     let bestScore = -Infinity;
     ACTIONS.forEach((action, index) => {
-      const weakReflex = (visualDifference * 0.08 + goalError * 0.18) * action;
+      const learnedVisualReflex = learnedVisualGain * goalError * 0.22 * action;
       const spontaneousBias = spontaneous * action * 0.23;
       const adaptationBias = -adaptation * action * 0.27;
-      const score = preferences[context][index] * POLICY_BIAS_SCALE + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
+      const score = preferences[context][index] * POLICY_BIAS_SCALE + learnedVisualReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
@@ -397,8 +414,8 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
-      selectAxisAction("x", differenceX, goalErrorX);
-      selectAxisAction("y", differenceY, goalErrorY);
+      selectAxisAction("x", goalErrorX);
+      selectAxisAction("y", goalErrorY);
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
     const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
@@ -406,6 +423,12 @@
     eligibilityY = eligibilityY.map((row) => row.map((value) => value * eligibilityMix));
     eligibilityX[neural.contextX][actionXIndex] = Math.max(eligibilityX[neural.contextX][actionXIndex], 1);
     eligibilityY[neural.contextY][actionYIndex] = Math.max(eligibilityY[neural.contextY][actionYIndex], 1);
+    for (let context = 0; context < CONTEXT_BINS; context += 1) {
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        episodeTraceX[context][index] = clamp(episodeTraceX[context][index] + eligibilityX[context][index] * dt, 0, 6);
+        episodeTraceY[context][index] = clamp(episodeTraceY[context][index] + eligibilityY[context][index] * dt, 0, 6);
+      }
+    }
 
     neural.progressRewardTimer -= dt;
     if (goalConfidence > 0.12 && neural.progressRewardTimer <= 0) {
@@ -419,10 +442,10 @@
       neural.progressRewardTimer = 0.12;
     }
 
-    const visualSteeringX = goalErrorX * goalConfidence * VISUAL_STEERING_GAIN;
-    const visualSteeringY = goalErrorY * goalConfidence * VISUAL_STEERING_GAIN;
-    const targetX = ACTIONS[actionXIndex] * 0.34 + visualSteeringX + differenceX * 0.05 + neural.spontaneousX * 0.22 - neural.turnBiasX * 0.15;
-    const targetY = ACTIONS[actionYIndex] * 0.34 + visualSteeringY + differenceY * 0.05 + neural.spontaneousY * 0.22 - neural.turnBiasY * 0.15;
+    const visualSteeringX = goalErrorX * goalConfidence * learnedVisualGain;
+    const visualSteeringY = goalErrorY * goalConfidence * learnedVisualGain;
+    const targetX = ACTIONS[actionXIndex] * 0.58 + visualSteeringX + neural.spontaneousX * 0.22 - neural.turnBiasX * 0.15;
+    const targetY = ACTIONS[actionYIndex] * 0.58 + visualSteeringY + neural.spontaneousY * 0.22 - neural.turnBiasY * 0.15;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -458,13 +481,57 @@
     }
   }
 
+  function reinforceTrace(preferences, trace, strength) {
+    for (let context = 0; context < preferences.length; context += 1) {
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        preferences[context][index] += LEARNING_RATE * strength * trace[context][index];
+      }
+      preferences[context] = preferences[context].map((value) => clamp(value, -2.5, 2.5));
+    }
+  }
+
+  function cloneTrace(trace) { return trace.map((row) => row.slice()); }
+
+  function updateLearnedVisualGain(success, quality = 0) {
+    const change = success
+      ? VISUAL_GAIN_SUCCESS_STEP * (0.7 + quality * 0.3)
+      : -VISUAL_GAIN_MISS_STEP;
+    learnedVisualGain = clamp(learnedVisualGain + change, 0, MAX_LEARNED_VISUAL_GAIN);
+  }
+
+  function learnFromCompletedEpisode() {
+    const shots = targets.filter((target) => target.hit).length;
+    const score = episodeRingHits + shots * 1.5;
+    const advantage = clamp(score - episodeScoreBaseline, -4, 4);
+    reinforceTrace(preferencesX, episodeTraceX, advantage * EPISODE_TRACE_SCALE);
+    reinforceTrace(preferencesY, episodeTraceY, advantage * EPISODE_TRACE_SCALE);
+    episodeScoreBaseline = lerp(episodeScoreBaseline, score, EPISODE_BASELINE_MIX);
+
+    const bestBefore = topPerformances.length ? topPerformances[0].score : -Infinity;
+    const candidate = { score, rings: episodeRingHits, shots, traceX: cloneTrace(episodeTraceX), traceY: cloneTrace(episodeTraceY) };
+    if (score > 0) {
+      topPerformances.push(candidate);
+      topPerformances.sort((a, b) => b.score - a.score);
+      topPerformances = topPerformances.slice(0, TOP_PERFORMANCE_COUNT);
+    }
+
+    if (score > 0 && score > bestBefore) {
+      learnedVisualGain = clamp(learnedVisualGain + RECORD_STEERING_GAIN_BONUS, 0, MAX_LEARNED_VISUAL_GAIN);
+      topPerformances.forEach((performance, index) => {
+        const replayStrength = RECORD_TRACE_BONUS * (1 - index / TOP_PERFORMANCE_COUNT);
+        reinforceTrace(preferencesX, performance.traceX, replayStrength);
+        reinforceTrace(preferencesY, performance.traceY, replayStrength);
+      });
+    }
+  }
+
   function updateLearningReadout() {
     const all = preferencesX.flat().concat(preferencesY.flat());
     const average = all.reduce((sum, value) => sum + value, 0) / all.length;
     const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
     const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
     const currentHits = rings.filter((ring) => ring.result === "hit").length;
-    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)}.`;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)} · learned visual gain ${(learnedVisualGain * 100).toFixed(0)}% · top performances ${topPerformances.length}/${TOP_PERFORMANCE_COUNT}.`;
   }
 
   function getGraphWindow() {
@@ -742,6 +809,7 @@
       const radius = RING_RADIUS - RING_CLEARANCE;
       const xQuality = 1 - clamp(horizontalError / radius, 0, 1);
       const yQuality = 1 - clamp(verticalError / radius, 0, 1);
+      updateLearnedVisualGain(success, (xQuality + yQuality) * 0.5);
       const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
       const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
@@ -782,6 +850,7 @@
   function recordEpisodeStats() {
     if (episodeRecorded) return;
     episodeRecorded = true;
+    learnFromCompletedEpisode();
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
     if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();
