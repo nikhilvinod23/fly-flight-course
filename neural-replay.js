@@ -54,6 +54,7 @@
   const POLICY_BIAS_SCALE = 0.5;
   const VISUAL_POLICY_RATE = 0.1;
   const VISUAL_POLICY_TRACE_SCALE = 0.9;
+  const VISUAL_DIRECTION_RATE = 0.08;
   const VISUAL_POLICY_LIMIT = 2.5;
   const MAX_LEARNED_VISUAL_GAIN = 0.78;
   const VISUAL_GAIN_SUCCESS_STEP = 0.07;
@@ -79,7 +80,7 @@
   const MAX_STORED_EPISODES = 500;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
-  const CURRICULUM_RAMP_EPISODES = 160;
+  const CURRICULUM_RAMP_EPISODES = 320;
   const GRAPH_PADDING = { left: 32, right: 34, top: 16, bottom: 24 };
 
   const baseRingX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
@@ -578,7 +579,19 @@
     }
   }
 
-  function learnFromRingOutcome(success, xQuality, yQuality) {
+  function reinforceObservedDirection(policy, trace, goalError, strength) {
+    const desiredDirection = Math.sign(goalError);
+    if (!desiredDirection) return;
+    for (let context = 0; context < policy.length; context += 1) {
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        const alignment = desiredDirection * ACTIONS[index];
+        policy[context][index] += VISUAL_DIRECTION_RATE * strength * alignment * trace[context][index];
+      }
+      policy[context] = policy[context].map((value) => clamp(value, -VISUAL_POLICY_LIMIT, VISUAL_POLICY_LIMIT));
+    }
+  }
+
+  function learnFromRingOutcome(success, xQuality, yQuality, goalErrorX, goalErrorY) {
     const quality = (xQuality + yQuality) * 0.5;
     const ringAdvantage = success ? 1.15 + quality * 0.85 : -0.22 + quality * 0.08;
     const visualAdvantage = success ? 1.2 + quality * 0.8 : -0.16;
@@ -586,6 +599,9 @@
     reinforceTrace(preferencesY, ringTraceY, ringAdvantage * RING_TRACE_SCALE);
     reinforceVisualTrace(visualPolicyX, ringTraceX, visualAdvantage * VISUAL_POLICY_TRACE_SCALE);
     reinforceVisualTrace(visualPolicyY, ringTraceY, visualAdvantage * VISUAL_POLICY_TRACE_SCALE);
+    const directionalStrength = success ? 1.0 + quality * 0.5 : -0.12;
+    reinforceObservedDirection(visualPolicyX, ringTraceX, goalErrorX, directionalStrength);
+    reinforceObservedDirection(visualPolicyY, ringTraceY, goalErrorY, directionalStrength);
     ringTraceX = freshEligibility();
     ringTraceY = freshEligibility();
   }
@@ -928,7 +944,7 @@
       const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
       const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
-      learnFromRingOutcome(success, xQuality, yQuality);
+      learnFromRingOutcome(success, xQuality, yQuality, neural.goalErrorX, neural.goalErrorY);
       nextRingIndex += 1;
     }
     for (const target of targets) {
