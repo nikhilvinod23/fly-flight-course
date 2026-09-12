@@ -87,10 +87,18 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .dopamine-track i { background: var(--green); }
 .neural-readout p { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.72rem; }
 
-.control-panel { border-color: var(--line); }
+.control-panel { display: grid; grid-template-columns: minmax(230px, 0.78fr) minmax(0, 1.22fr); align-items: start; gap: 1.35rem 1.5rem; border-color: var(--line); padding: 1.35rem 0 1.5rem; }
+.control-overview, .control-actions { min-width: 0; }
+.control-overview { display: grid; align-content: start; gap: 1.1rem; }
+.control-actions { display: grid; align-content: start; gap: 0.9rem; }
+.control-actions .button-row { margin-left: 0; }
+.primary-actions { padding-bottom: 0.1rem; }
 .control-copy p, .control-list, footer { color: var(--muted); }
-.training-jump { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
-.course-choice { display: grid; gap: 0.28rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.control-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem 1.1rem; }
+.control-list span { position: relative; padding-left: 0.9rem; }
+.control-list span::before { content: ""; position: absolute; left: 0; top: 0.48em; width: 0.34rem; height: 0.34rem; background: var(--blue); }
+.training-jump { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0; padding: 0.9rem 0 0; border-top: 1px solid var(--line); }
+.course-choice { display: grid; gap: 0.28rem; margin: 0; padding: 0.9rem 0 0; border-top: 1px solid var(--line); }
 .course-choice label { color: var(--blue); font-size: 0.65rem; font-weight: 850; letter-spacing: 0.09em; }
 .course-choice select { max-width: 30rem; min-height: 2rem; border: 1px solid #45637e; background: #091423; color: var(--ink); font: inherit; padding: 0.25rem 0.45rem; }
 .course-choice small { color: var(--muted); font-size: 0.72rem; }
@@ -99,7 +107,7 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .training-jump small { color: var(--muted); font-size: 0.72rem; }
 .button-row.compact { margin: 0; }
 .button-row.compact button { padding: 0.55rem 0.75rem; font-size: 0.72rem; }
-.training-graph { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.training-graph { grid-column: 1 / -1; margin-top: 0.1rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .training-graph-heading { display: flex; justify-content: space-between; gap: 1rem; color: var(--blue); font-size: 0.65rem; font-weight: 850; letter-spacing: 0.09em; }
 .training-graph-heading span { color: var(--muted); font-weight: 600; letter-spacing: 0.04em; }
 .training-graph-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.55rem; color: var(--muted); font-size: 0.61rem; font-weight: 800; letter-spacing: 0.06em; }
@@ -115,7 +123,7 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .training-stats div { display: flex; align-items: baseline; justify-content: space-between; gap: 0.35rem; padding: 0.38rem 0.45rem; border: 1px solid #1c3c56; background: #071321; }
 .training-stats span { color: var(--muted); font-size: 0.55rem; font-weight: 800; letter-spacing: 0.045em; }
 .training-stats strong { color: var(--ink); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
-#training-graph { display: block; width: 100%; height: 190px; margin-top: 0.45rem; border: 1px solid #45637e; background: #030914; }
+#training-graph { display: block; width: 100%; height: 280px; margin-top: 0.65rem; border: 1px solid #45637e; background: #030914; }
 #training-graph:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .graph-probe { min-height: 1.7rem; margin-top: 0.4rem; padding: 0.38rem 0.5rem; border-left: 2px solid var(--blue); background: #071321; color: var(--ink); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
 .graph-legend { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; margin-top: 0.4rem; color: var(--muted); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; }
@@ -130,6 +138,7 @@ footer a:hover, footer a:focus-visible { color: var(--ink); }
 
 @media (max-width: 1020px) {
   .dual-view { grid-template-columns: 1fr; }
+  .control-panel { grid-template-columns: 1fr; }
   .game-panel .game-frame > canvas, .fly-view { height: 58vh; min-height: 400px; }
 }
 
@@ -140,5 +149,6 @@ footer a:hover, footer a:focus-visible { color: var(--ink); }
   .sensor-previews { align-items: flex-start !important; flex-wrap: wrap; }
   .training-jump { align-items: flex-start; flex-direction: column; }
   .training-graph-heading { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
+  .control-list { grid-template-columns: 1fr; }
   .training-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

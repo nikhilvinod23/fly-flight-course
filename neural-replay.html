@@ -97,43 +97,47 @@
       </section>
 
       <section class="control-panel">
-        <div class="control-copy">
-          <h2>Closed-loop 3D neural replay</h2>
-          <p>The game camera is reduced to a tiny retinal image. A joint movement policy learns from ring distance, retinal position, motion, and course feedback across the full ten-ring episode.</p>
-        </div>
-        <div class="control-list" aria-label="Neural replay information">
-          <span>48 × 27 camera image supplies visual activity</span>
-          <span>Retinal ring position, apparent size, and motion form the policy state</span>
-          <span>Joint 2D actions are updated with temporal-difference learning</span>
-          <span>Target alignment reinforces movement and firing separately</span>
-          <span>Exploration gradually decays across episodes</span>
-          <span>Stationary and randomized courses support transfer testing</span>
-          <span>Front-limb activity triggers firing</span>
-          <span>NeuroMechFly-derived scanned body mesh</span>
-        </div>
-        <div class="button-row">
-          <button id="run-button" type="button">Run episode</button>
-          <button id="reset-learning" class="secondary" type="button">Reset learning</button>
-        </div>
-        <div class="course-choice">
-          <label for="course-mode">COURSE MODE</label>
-          <select id="course-mode">
-            <option value="stationary">Stationary — repeat the same ten-ring course</option>
-            <option value="randomized">Randomized — new ring layout each episode</option>
-          </select>
-          <small id="course-mode-note">Train on the stationary course, then switch modes between episodes to test transfer.</small>
-        </div>
-        <div class="training-jump">
-          <div>
-            <strong>FAST-FORWARD TRAINING</strong>
-            <small>Simulate complete episodes, then inspect the learned policy on the next run.</small>
+        <div class="control-overview">
+          <div class="control-copy">
+            <h2>Closed-loop 3D neural replay</h2>
+            <p>The game camera is reduced to a tiny retinal image. A joint movement policy learns from ring distance, retinal position, motion, and course feedback across the full ten-ring episode.</p>
           </div>
-          <div class="button-row compact">
-            <button id="skip-5" class="secondary" type="button">Skip 5</button>
-            <button id="skip-10" class="secondary" type="button">Skip 10</button>
-            <button id="skip-25" class="secondary" type="button">Skip 25</button>
-            <button id="skip-50" class="secondary" type="button">Skip 50</button>
-            <button id="skip-100" class="secondary" type="button">Skip 100</button>
+          <div class="control-list" aria-label="Neural replay information">
+            <span>48 × 27 camera image supplies visual activity</span>
+            <span>Retinal ring position, apparent size, and motion form the policy state</span>
+            <span>Joint 2D actions are updated with temporal-difference learning</span>
+            <span>Target alignment reinforces movement and firing separately</span>
+            <span>Exploration gradually decays across episodes</span>
+            <span>Stationary and randomized courses support transfer testing</span>
+            <span>Front-limb activity triggers firing</span>
+            <span>NeuroMechFly-derived scanned body mesh</span>
+          </div>
+        </div>
+        <div class="control-actions">
+          <div class="button-row primary-actions">
+            <button id="run-button" type="button">Run episode</button>
+            <button id="reset-learning" class="secondary" type="button">Reset learning</button>
+          </div>
+          <div class="course-choice">
+            <label for="course-mode">COURSE MODE</label>
+            <select id="course-mode">
+              <option value="stationary">Stationary — repeat the same ten-ring course</option>
+              <option value="randomized">Randomized — new ring layout each episode</option>
+            </select>
+            <small id="course-mode-note">Train on the stationary course, then switch modes between episodes to test transfer.</small>
+          </div>
+          <div class="training-jump">
+            <div>
+              <strong>FAST-FORWARD TRAINING</strong>
+              <small>Simulate complete episodes, then inspect the learned policy on the next run.</small>
+            </div>
+            <div class="button-row compact">
+              <button id="skip-5" class="secondary" type="button">Skip 5</button>
+              <button id="skip-10" class="secondary" type="button">Skip 10</button>
+              <button id="skip-25" class="secondary" type="button">Skip 25</button>
+              <button id="skip-50" class="secondary" type="button">Skip 50</button>
+              <button id="skip-100" class="secondary" type="button">Skip 100</button>
+            </div>
           </div>
         </div>
         <div class="training-graph">
