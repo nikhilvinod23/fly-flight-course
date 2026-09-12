@@ -722,6 +722,10 @@
       const [jointX, jointY] = JOINT_ACTIONS[qActionIndex];
       actionXIndex = jointX < 0 ? 0 : jointX > 0 ? 4 : 2;
       actionYIndex = jointY < 0 ? 0 : jointY > 0 ? 4 : 2;
+      if (!oracleMode && learnedVisualGain > 0.02) {
+        selectAxisAction("x");
+        selectAxisAction("y");
+      }
       if (ringVisible && !oracleMode) {
         const visualAlignment = (jointX * input.ringErrorX + jointY * input.ringErrorY) * 0.5;
         qRewardAccumulator += clamp(visualAlignment * 0.05 * input.ringConfidence, -0.08, 0.08);
@@ -762,14 +766,16 @@
     }
 
     const [jointMoveX, jointMoveY] = JOINT_ACTIONS[qActionIndex] || [0, 0];
+    const visualMoveX = learnedVisualGain > 0.02 && !oracleMode ? ACTIONS[actionXIndex] : 0;
+    const visualMoveY = learnedVisualGain > 0.02 && !oracleMode ? ACTIONS[actionYIndex] : 0;
     const activeTarget = targets[nextTargetIndex];
     const activeRing = rings[nextRingIndex];
     let oracleAim = activeRing;
     if (oracleMode && activeTarget && (!activeRing || activeRing.z - player.z > 520) && activeTarget.z - player.z > 40 && activeTarget.z - player.z < 520) oracleAim = activeTarget;
     const oracleMoveX = oracleAim ? clamp((oracleAim.x - player.x) / 118, -1, 1) : 0;
     const oracleMoveY = oracleAim ? clamp((oracleAim.y - player.y) / 118, -1, 1) : 0;
-    const targetX = oracleMode ? oracleMoveX : jointMoveX * 0.72 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
-    const targetY = oracleMode ? oracleMoveY : jointMoveY * 0.72 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
+    const targetX = oracleMode ? oracleMoveX : jointMoveX * 0.55 + visualMoveX * 0.35 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
+    const targetY = oracleMode ? oracleMoveY : jointMoveY * 0.55 + visualMoveY * 0.35 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -1256,6 +1262,7 @@
   function recordEpisodeStats() {
     if (episodeRecorded) return;
     episodeRecorded = true;
+    learnFromCompletedEpisode();
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
     if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();
