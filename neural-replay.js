@@ -986,8 +986,8 @@
       const fireThreshold = 0.14;
       if (!oracleMode) {
         const fireAlignmentReward = policyAction[2]
-          ? (targetVisual > fireThreshold ? clamp(targetVisual * 0.08, 0, 0.1) : -0.035)
-          : (targetVisual > fireThreshold ? -0.012 : 0);
+          ? (targetVisual > fireThreshold ? clamp(targetVisual * 0.22, 0, 0.24) : -0.05)
+          : (targetVisual > fireThreshold ? -0.06 : 0);
         policyRewardAccumulator += fireAlignmentReward;
       }
       if (targetVisual > fireThreshold && (oracleMode || policyAction[2] === 1) && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
