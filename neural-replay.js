@@ -23,6 +23,7 @@
     graphShowShots: document.getElementById("graph-show-shots"), graphShowShotAverage: document.getElementById("graph-show-shot-average"),
     courseMode: document.getElementById("course-mode"), courseModeNote: document.getElementById("course-mode-note"),
     evaluate: document.getElementById("evaluate-button"),
+    oracle: document.getElementById("oracle-button"), retinalDiagnostic: document.getElementById("retinal-diagnostic"),
     statRecordRings: document.getElementById("stat-record-rings"), statRecordHits: document.getElementById("stat-record-hits"),
     statPerfectShots: document.getElementById("stat-perfect-shots"), statShotsAverage: document.getElementById("stat-shots-average"),
     statFirstRingsAverage: document.getElementById("stat-first-rings-average"), statFirstShotsAverage: document.getElementById("stat-first-shots-average"),
@@ -57,6 +58,11 @@
   const Q_EPSILON_DECAY = 260;
   const Q_REPLAY_CAPACITY = 6000;
   const Q_REPLAY_UPDATES_PER_STEP = 4;
+  const FIRE_POSITION_BINS = 5;
+  const FIRE_DEPTH_BINS = 3;
+  const FIRE_STATE_COUNT = FIRE_POSITION_BINS * FIRE_POSITION_BINS * FIRE_DEPTH_BINS;
+  const FIRE_ALPHA = 0.18;
+  const FIRE_GAMMA = 0.86;
   const COURSE_LENGTH = 7300;
   const SPEED = 360;
   const LATERAL_SPEED = 270;
@@ -156,6 +162,12 @@
   let qUpdates = 0;
   let qReplayBuffer = [];
   let evaluationMode = false;
+  let oracleMode = false;
+  let fireQValues = freshFireQValues();
+  let fireState = null;
+  let fireAction = 0;
+  let fireRewardAccumulator = 0;
+  let fireDecisionTimer = 0;
   let firePreference = 0;
   let fireBaseline = 0;
   let fireEligibility = 0;
@@ -173,6 +185,7 @@
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
+  let retinalDiagnostic = { detectedX: null, detectedY: null, actualX: null, actualY: null, confidence: 0 };
 
   const neural = {
     visualLeft: 0, visualRight: 0, visualUp: 0, visualDown: 0,
@@ -197,12 +210,40 @@
   function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
+  function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0]); }
   function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
   function signedBin(value, bins) {
     return clamp(Math.floor((clamp(value, -1, 1) + 1) * 0.5 * bins), 0, bins - 1);
   }
   function velocityBin(value) {
     return value < -0.22 ? 0 : value > 0.22 ? 2 : 1;
+  }
+  function fireDepthBin(value) { return value < 140 ? 0 : value < 360 ? 1 : 2; }
+  function encodeFireState(input, targetDepth) {
+    const x = signedBin(input.targetErrorX, FIRE_POSITION_BINS);
+    const y = signedBin(input.targetErrorY, FIRE_POSITION_BINS);
+    return (x * FIRE_POSITION_BINS + y) * FIRE_DEPTH_BINS + fireDepthBin(targetDepth);
+  }
+  function chooseFireAction(state) {
+    if (randomUnit() < qEpsilon()) return Math.floor(randomUnit() * 2);
+    const values = fireQValues[state];
+    if (values[1] === values[0]) return inputFireTieBreak();
+    return values[1] > values[0] ? 1 : 0;
+  }
+  function inputFireTieBreak() { return 0; }
+  function updateFireValue(nextState, terminal = false) {
+    if (fireState === null || evaluationMode) return;
+    const current = fireQValues[fireState][fireAction];
+    const nextValue = terminal ? 0 : Math.max(...fireQValues[nextState]);
+    const target = clamp(fireRewardAccumulator, -1.5, 1.5) + FIRE_GAMMA * nextValue;
+    fireQValues[fireState][fireAction] = current + FIRE_ALPHA * (target - current);
+    fireRewardAccumulator = 0;
+  }
+  function finalizeFireEpisode() {
+    updateFireValue(0, true);
+    fireState = null;
+    fireAction = 0;
+    fireRewardAccumulator = 0;
   }
   function sizeBin(value) {
     return value < 0.18 ? 0 : value < 0.5 ? 1 : 2;
@@ -262,6 +303,10 @@
     qState = null;
     qActionIndex = 4;
     qRewardAccumulator = 0;
+    fireState = null;
+    fireAction = 0;
+    fireRewardAccumulator = 0;
+    fireDecisionTimer = 0;
   }
   function explorationNoise() {
     return Math.max(ACTION_NOISE_FLOOR, ACTION_NOISE_START * Math.exp(-episode / EXPLORATION_DECAY));
@@ -334,6 +379,7 @@
     sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
     previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
     previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
+    retinalDiagnostic = { detectedX: null, detectedY: null, actualX: null, actualY: null, confidence: 0 };
     rings.forEach((ring) => { ring.result = null; });
     if (render) {
       syncUI();
@@ -348,12 +394,14 @@
     preferencesX = freshPreferences();
     preferencesY = freshPreferences();
     qValues = freshQValues();
+    fireQValues = freshFireQValues();
     qState = null;
     qActionIndex = 4;
     qRewardAccumulator = 0;
     qUpdates = 0;
     qReplayBuffer = [];
     evaluationMode = false;
+    oracleMode = false;
     visualPolicyX = freshPreferences();
     visualPolicyY = freshPreferences();
     eligibilityX = freshEligibility();
@@ -529,12 +577,40 @@
     const ringRowCenter = nearestRing
       ? nearestRing.centroidY / nearestRing.weight
       : ringWeight ? ringCentroidY / ringWeight : RETINA_HEIGHT * 0.5;
+    const actualRing = rings[nextRingIndex];
+    const actualProjection = actualRing ? project(actualRing.x, actualRing.y, actualRing.z) : null;
+    const actualColumnCenter = actualProjection
+      ? clamp((actualProjection.x / width) * RETINA_WIDTH, -RETINA_WIDTH, RETINA_WIDTH * 2)
+      : null;
+    const actualRowCenter = actualProjection
+      ? clamp((actualProjection.y / height) * RETINA_HEIGHT, -RETINA_HEIGHT, RETINA_HEIGHT * 2)
+      : null;
+    const detectedErrorX = clamp((ringColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1);
+    const detectedErrorY = clamp((RETINA_HEIGHT * 0.5 - ringRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1);
+    const actualErrorX = actualColumnCenter === null ? null : clamp((actualColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1);
+    const actualErrorY = actualRowCenter === null ? null : clamp((RETINA_HEIGHT * 0.5 - actualRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1);
+    retinalDiagnostic = { detectedX: detectedErrorX, detectedY: detectedErrorY, actualX: actualErrorX, actualY: actualErrorY, confidence: clamp(selectedRingWeight / 10, 0, 1) };
+    if (ui.retinalDiagnostic) {
+      const formatPoint = (x, y) => x === null || y === null ? "—" : `${x.toFixed(2)},${y.toFixed(2)}`;
+      ui.retinalDiagnostic.textContent = `DETECTED ${formatPoint(detectedErrorX, detectedErrorY)} · ACTUAL ${formatPoint(actualErrorX, actualErrorY)} · CONF ${retinalDiagnostic.confidence.toFixed(2)}`;
+    }
+    const drawRetinaMarker = (x, y, color) => {
+      if (x === null || y === null || x < 0 || x >= RETINA_WIDTH || y < 0 || y >= RETINA_HEIGHT) return;
+      retinaCtx.strokeStyle = color;
+      retinaCtx.lineWidth = 0.65;
+      retinaCtx.beginPath();
+      retinaCtx.moveTo(x - 2, y); retinaCtx.lineTo(x + 2, y);
+      retinaCtx.moveTo(x, y - 2); retinaCtx.lineTo(x, y + 2);
+      retinaCtx.stroke();
+    };
+    drawRetinaMarker(actualColumnCenter, actualRowCenter, "#f1ad45");
+    drawRetinaMarker(ringColumnCenter, ringRowCenter, "#48b8dd");
     return {
       left: clamp(left * 2.45, 0, 1), right: clamp(right * 2.45, 0, 1),
       up: clamp(up * 2.7, 0, 1), down: clamp(down * 2.7, 0, 1),
       center: clamp(center * 2.2, 0, 1), targetCenter: clamp(targetCenter * 6.5, 0, 1),
-      ringErrorX: clamp((ringColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
-      ringErrorY: clamp((RETINA_HEIGHT * 0.5 - ringRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
+      ringErrorX: detectedErrorX,
+      ringErrorY: detectedErrorY,
       ringConfidence: clamp(selectedRingWeight / 10, 0, 1),
       ringSize: clamp(Math.sqrt(selectedRingWeight / 30), 0, 1),
       targetErrorX: clamp((targetColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
@@ -647,8 +723,14 @@
     }
 
     const [jointMoveX, jointMoveY] = JOINT_ACTIONS[qActionIndex] || [0, 0];
-    const targetX = jointMoveX * 0.72 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
-    const targetY = jointMoveY * 0.72 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
+    const activeTarget = targets[nextTargetIndex];
+    const activeRing = rings[nextRingIndex];
+    let oracleAim = activeRing;
+    if (oracleMode && activeTarget && (!activeRing || activeRing.z - player.z > 520) && activeTarget.z - player.z > 40 && activeTarget.z - player.z < 520) oracleAim = activeTarget;
+    const oracleMoveX = oracleAim ? clamp((oracleAim.x - player.x) / 118, -1, 1) : 0;
+    const oracleMoveY = oracleAim ? clamp((oracleAim.y - player.y) / 118, -1, 1) : 0;
+    const targetX = oracleMode ? oracleMoveX : jointMoveX * 0.72 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
+    const targetY = oracleMode ? oracleMoveY : jointMoveY * 0.72 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -662,15 +744,28 @@
     const target = targets[nextTargetIndex];
     if (target && !target.hit && !target.missed) {
       const targetDepth = target.z - player.z;
-      const targetAlignment = input.targetConfidence * (1 - clamp((Math.abs(input.targetErrorX) + Math.abs(input.targetErrorY)) * 0.5, 0, 1));
+      const oracleAlignment = clamp(1 - Math.hypot(target.x - player.x, target.y - player.y) / (TARGET_HIT_RADIUS * 1.25), 0, 1);
+      const targetAlignment = oracleMode
+        ? oracleAlignment
+        : input.targetConfidence * (1 - clamp((Math.abs(input.targetErrorX) + Math.abs(input.targetErrorY)) * 0.5, 0, 1));
       const targetVisual = Math.max(input.targetCenter * input.center, targetAlignment * 1.5);
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
       fireEligibility = Math.max(fireEligibility * Math.exp(-dt * 1.4), targetVisual);
       const fireThreshold = clamp(0.2 - firePreference * 0.04, 0.08, 0.26);
-      if (targetVisual > fireThreshold && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
+      fireDecisionTimer -= dt;
+      if (fireDecisionTimer <= 0) {
+        const nextFireState = encodeFireState(input, targetDepth);
+        updateFireValue(nextFireState);
+        fireState = nextFireState;
+        fireAction = oracleMode ? 1 : chooseFireAction(nextFireState);
+        fireDecisionTimer = 0.13 + randomUnit() * 0.1;
+      }
+      if (targetVisual > fireThreshold && (oracleMode || fireAction === 1) && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
     } else {
       neural.frontLimb = lerp(neural.frontLimb, 0, 1 - Math.exp(-dt * 12));
       fireEligibility *= Math.exp(-dt * 1.4);
+      fireDecisionTimer = 0;
+      fireAction = 0;
     }
     neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
   }
@@ -1019,6 +1114,7 @@
   }
 
   function applyFireReward(reward, color = null) {
+    fireRewardAccumulator += reward;
     const delta = reward - fireBaseline;
     fireBaseline = lerp(fireBaseline, reward, BASELINE_MIX);
     firePreference = clamp(firePreference + LEARNING_RATE * delta * fireEligibility, -1, 1);
@@ -1101,15 +1197,18 @@
 
   function finishEpisode() {
     const wasEvaluation = evaluationMode;
+    const wasOracle = oracleMode;
     running = false;
     finalizeQEpisode();
+    finalizeFireEpisode();
     evaluationMode = false;
+    oracleMode = false;
     if (!wasEvaluation) recordEpisodeStats();
     syncUI();
     ui.card.hidden = false;
     ui.status.textContent = "COMPLETE";
-    ui.message.textContent = wasEvaluation ? `GREEDY EVALUATION · ${episodeRingHits}/10 RINGS · ${targets.filter((target) => target.hit).length}/2 SHOTS` : "EPISODE COMPLETE";
-    if (wasEvaluation) ui.learning.textContent = `Greedy evaluation · ${episodeRingHits}/${rings.length} rings · ${targets.filter((target) => target.hit).length}/${targets.length} shots · no learning update.`;
+    ui.message.textContent = wasEvaluation ? `${wasOracle ? "ORACLE BENCHMARK" : "GREEDY EVALUATION"} · ${episodeRingHits}/10 RINGS · ${targets.filter((target) => target.hit).length}/2 SHOTS` : "EPISODE COMPLETE";
+    if (wasEvaluation) ui.learning.textContent = `${wasOracle ? "Oracle benchmark uses known world geometry; it does not train." : "Greedy evaluation uses the learned policy; it does not train."} Result: ${episodeRingHits}/${rings.length} rings · ${targets.filter((target) => target.hit).length}/${targets.length} shots.`;
     ui.start.textContent = "Run next episode";
   }
 
@@ -1127,7 +1226,7 @@
   function fastForwardEpisodes(count) {
     if (running || fastForwarding) return;
     fastForwarding = true;
-    [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = true; });
+    [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.oracle, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = true; });
     ui.card.hidden = false;
     ui.status.textContent = "SIMULATING";
     ui.message.textContent = `FAST-FORWARD ×${count}`;
@@ -1161,7 +1260,7 @@
       running = false;
       fastForwarding = false;
       fastForwardState = null;
-      [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
+    [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.oracle, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
       console.error(error);
       syncUI();
       ui.status.textContent = "ERROR";
@@ -1374,6 +1473,7 @@
     ui.action.textContent = `X ${neural.moveX.toFixed(2)} · Y ${neural.moveY.toFixed(2)}`;
     ui.reward.textContent = `REWARD ${lastReward.toFixed(2)}`;
     ui.evaluate.disabled = running || fastForwarding;
+    ui.oracle.disabled = running || fastForwarding;
     setBar(ui.visualLeft, neural.visualLeft); setBar(ui.visualRight, neural.visualRight);
     setBar(ui.visualUp, neural.visualUp); setBar(ui.visualDown, neural.visualDown);
     setBar(ui.motorLeft, neural.motorLeft); setBar(ui.motorRight, neural.motorRight);
@@ -1690,9 +1790,10 @@
     }
   }
 
-  function startEpisode(evaluate = false) {
+  function startEpisode(mode = "train") {
     if (running || fastForwarding) return;
-    evaluationMode = evaluate;
+    evaluationMode = mode !== "train";
+    oracleMode = mode === "oracle";
     episode += 1;
     resetEpisode();
     running = true;
@@ -1714,10 +1815,11 @@
   }
 
   window.addEventListener("resize", () => { resizeGame(); resizeThree(); drawGame(); updateThree(); drawTrainingGraph(); });
-  ui.start.addEventListener("click", startEpisode);
-  ui.run.addEventListener("click", startEpisode);
+  ui.start.addEventListener("click", () => startEpisode("train"));
+  ui.run.addEventListener("click", () => startEpisode("train"));
   ui.resetLearning.addEventListener("click", resetLearning);
-  ui.evaluate.addEventListener("click", () => startEpisode(true));
+  ui.evaluate.addEventListener("click", () => startEpisode("greedy"));
+  ui.oracle.addEventListener("click", () => startEpisode("oracle"));
   ui.courseMode.addEventListener("change", () => {
     if (running || fastForwarding) {
       syncCourseModeUI();
