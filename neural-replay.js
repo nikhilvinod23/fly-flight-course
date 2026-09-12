@@ -21,6 +21,7 @@
     graphFrom: document.getElementById("graph-from"), graphTo: document.getElementById("graph-to"), graphApply: document.getElementById("graph-apply"),
     graphShowRings: document.getElementById("graph-show-rings"), graphShowRingAverage: document.getElementById("graph-show-ring-average"),
     graphShowShots: document.getElementById("graph-show-shots"), graphShowShotAverage: document.getElementById("graph-show-shot-average"),
+    courseMode: document.getElementById("course-mode"), courseModeNote: document.getElementById("course-mode-note"),
     statRecordRings: document.getElementById("stat-record-rings"), statRecordHits: document.getElementById("stat-record-hits"),
     statPerfectShots: document.getElementById("stat-perfect-shots"), statShotsAverage: document.getElementById("stat-shots-average"),
     statRingsAverage: document.getElementById("stat-rings-average"), statLatestRings: document.getElementById("stat-latest-rings"),
@@ -37,6 +38,20 @@
   const COLORS = { ink: "#eaf4ff", blue: "#48b8dd", red: "#ef665f", green: "#58d68d", amber: "#f1ad45", sky: "#030914", grid: "#244766" };
   const RING_COLORS = ["#40bde3", "#f2a541", "#55ca88", "#a883ef", "#e66d9d"];
   const ACTIONS = [-1, -0.5, 0, 0.5, 1];
+  const JOINT_ACTIONS = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0], [0, 0], [1, 0],
+    [-1, 1], [0, 1], [1, 1]
+  ];
+  const Q_POSITION_BINS = 5;
+  const Q_SIZE_BINS = 3;
+  const Q_VELOCITY_BINS = 3;
+  const Q_STATE_COUNT = Q_POSITION_BINS * Q_POSITION_BINS * Q_SIZE_BINS * Q_VELOCITY_BINS * Q_VELOCITY_BINS;
+  const Q_ALPHA = 0.2;
+  const Q_GAMMA = 0.92;
+  const Q_EPSILON_START = 0.34;
+  const Q_EPSILON_FLOOR = 0.06;
+  const Q_EPSILON_DECAY = 260;
   const COURSE_LENGTH = 7300;
   const SPEED = 360;
   const LATERAL_SPEED = 270;
@@ -102,6 +117,7 @@
   let explosions;
   let time = 0;
   let episode = 0;
+  let courseMode = "stationary";
   let running = false;
   let lastTime = 0;
   let nextRingIndex = 0;
@@ -128,6 +144,11 @@
   let episodeScoreBaseline = 0;
   let topPerformances = [];
   let learnedVisualGain = 0;
+  let qValues = freshQValues();
+  let qState = null;
+  let qActionIndex = 4;
+  let qRewardAccumulator = 0;
+  let qUpdates = 0;
   let firePreference = 0;
   let fireBaseline = 0;
   let fireEligibility = 0;
@@ -168,6 +189,47 @@
   function sensoryNoise(amount) { return (randomUnit() * 2 - 1) * amount; }
   function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
+  function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
+  function qEpsilon() { return Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
+  function signedBin(value, bins) {
+    return clamp(Math.floor((clamp(value, -1, 1) + 1) * 0.5 * bins), 0, bins - 1);
+  }
+  function velocityBin(value) {
+    return value < -0.22 ? 0 : value > 0.22 ? 2 : 1;
+  }
+  function sizeBin(value) {
+    return value < 0.18 ? 0 : value < 0.5 ? 1 : 2;
+  }
+  function encodeQState(input) {
+    const x = signedBin(input.ringErrorX, Q_POSITION_BINS);
+    const y = signedBin(input.ringErrorY, Q_POSITION_BINS);
+    const size = sizeBin(input.ringSize * input.ringConfidence);
+    const velocityX = velocityBin(neural.moveX);
+    const velocityY = velocityBin(neural.moveY);
+    return ((((x * Q_POSITION_BINS) + y) * Q_SIZE_BINS + size) * Q_VELOCITY_BINS + velocityX) * Q_VELOCITY_BINS + velocityY;
+  }
+  function bestQValue(state) { return Math.max(...qValues[state]); }
+  function chooseQAction(state) {
+    if (randomUnit() < qEpsilon()) return Math.floor(randomUnit() * JOINT_ACTIONS.length);
+    const values = qValues[state];
+    const best = Math.max(...values);
+    const candidates = values.map((value, index) => value === best ? index : -1).filter((index) => index >= 0);
+    return candidates[Math.floor(randomUnit() * candidates.length)] ?? 4;
+  }
+  function updateQValue(nextState, terminal = false) {
+    if (qState === null) return;
+    const current = qValues[qState][qActionIndex];
+    const target = qRewardAccumulator + (terminal ? 0 : Q_GAMMA * bestQValue(nextState));
+    qValues[qState][qActionIndex] = current + Q_ALPHA * (target - current);
+    qUpdates += 1;
+    qRewardAccumulator = 0;
+  }
+  function finalizeQEpisode() {
+    updateQValue(0, true);
+    qState = null;
+    qActionIndex = 4;
+    qRewardAccumulator = 0;
+  }
   function explorationNoise() {
     return Math.max(ACTION_NOISE_FLOOR, ACTION_NOISE_START * Math.exp(-episode / EXPLORATION_DECAY));
   }
@@ -183,7 +245,9 @@
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 4294967296;
     };
-    const variation = episodeNumber === 0 ? 0 : Math.min(1, episodeNumber / CURRICULUM_RAMP_EPISODES);
+    const variation = courseMode === "randomized"
+      ? Math.min(1, 0.25 + episodeNumber / CURRICULUM_RAMP_EPISODES)
+      : 0;
     return baseRingX.map((baseX, index) => ({
       x: clamp(baseX + (next() * 2 - 1) * 72 * variation, -265, 265),
       y: clamp(baseRingY[index] + (next() * 2 - 1) * 58 * variation, -180, 180),
@@ -219,6 +283,9 @@
     neural.rewardReferenceY = 0;
     neural.progressRewardTimer = 0;
     neural.frontLimb = 0;
+    qState = null;
+    qActionIndex = 4;
+    qRewardAccumulator = 0;
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     fireEligibility = 0;
@@ -247,6 +314,11 @@
     if (running || fastForwarding) return;
     preferencesX = freshPreferences();
     preferencesY = freshPreferences();
+    qValues = freshQValues();
+    qState = null;
+    qActionIndex = 4;
+    qRewardAccumulator = 0;
+    qUpdates = 0;
     visualPolicyX = freshPreferences();
     visualPolicyY = freshPreferences();
     eligibilityX = freshEligibility();
@@ -264,7 +336,17 @@
     episode = 0;
     resetEpisode();
     drawTrainingGraph();
-    ui.learning.textContent = "Preferences are untrained. The fly is exploring in two axes.";
+    ui.learning.textContent = "Joint Q policy is untrained. The fly is exploring the full course.";
+    syncCourseModeUI();
+  }
+
+  function syncCourseModeUI() {
+    if (!ui.courseMode) return;
+    ui.courseMode.value = courseMode;
+    ui.courseMode.disabled = running || fastForwarding;
+    ui.courseModeNote.textContent = courseMode === "stationary"
+      ? "The same ten-ring layout repeats. Switch to randomized between episodes to test transfer."
+      : "A new ring layout is generated each episode while the same full-course learner continues. Switch only between episodes.";
   }
 
   function resizeGame() {
@@ -487,8 +569,13 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
-      selectAxisAction("x");
-      selectAxisAction("y");
+      const nextQState = encodeQState(input);
+      updateQValue(nextQState);
+      qActionIndex = chooseQAction(nextQState);
+      qState = nextQState;
+      const [jointX, jointY] = JOINT_ACTIONS[qActionIndex];
+      actionXIndex = jointX < 0 ? 0 : jointX > 0 ? 4 : 2;
+      actionYIndex = jointY < 0 ? 0 : jointY > 0 ? 4 : 2;
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
     const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
@@ -524,8 +611,9 @@
       neural.progressRewardTimer = 0.12;
     }
 
-    const targetX = ACTIONS[actionXIndex] * 0.64 + neural.spontaneousX * 0.2 - neural.turnBiasX * 0.15;
-    const targetY = ACTIONS[actionYIndex] * 0.64 + neural.spontaneousY * 0.2 - neural.turnBiasY * 0.15;
+    const [jointMoveX, jointMoveY] = JOINT_ACTIONS[qActionIndex] || [0, 0];
+    const targetX = jointMoveX * 0.72 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
+    const targetY = jointMoveY * 0.72 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -651,12 +739,13 @@
   }
 
   function updateLearningReadout() {
-    const all = preferencesX.flat().concat(preferencesY.flat());
-    const average = all.reduce((sum, value) => sum + value, 0) / all.length;
+    const allQ = qValues.flat();
+    const qMean = allQ.reduce((sum, value) => sum + value, 0) / allQ.length;
+    const qPeak = Math.max(...allQ);
     const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
     const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
     const currentHits = rings.filter((ring) => ring.result === "hit").length;
-    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · preference mean ${average.toFixed(2)} · learned visual gain ${(learnedVisualGain * 100).toFixed(0)}% · top performances ${topPerformances.length}/${TOP_PERFORMANCE_COUNT}.`;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · joint Q policy · ε ${qEpsilon().toFixed(2)} · Q mean ${qMean.toFixed(2)} · peak ${qPeak.toFixed(2)} · updates ${qUpdates}.`;
   }
 
   function getGraphWindow() {
@@ -882,6 +971,7 @@
       reinforceVisualTrace(visualPolicyY, eligibilityY, clamp(visualDeltaY, -0.12, 0.28));
     }
     const reward = (rewardX + rewardY) * 0.5;
+    qRewardAccumulator += reward;
     lastReward = reward;
     rewardFlash = reward > 0 ? 0.65 : -0.55;
     rewardColor = color || (reward > 0 ? COLORS.green : COLORS.red);
@@ -972,7 +1062,9 @@
 
   function finishEpisode() {
     running = false;
+    finalizeQEpisode();
     recordEpisodeStats();
+    syncUI();
     ui.card.hidden = false;
     ui.status.textContent = "COMPLETE";
     ui.message.textContent = "EPISODE COMPLETE";
@@ -982,7 +1074,6 @@
   function recordEpisodeStats() {
     if (episodeRecorded) return;
     episodeRecorded = true;
-    learnFromCompletedEpisode();
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
     if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();
@@ -994,7 +1085,7 @@
   function fastForwardEpisodes(count) {
     if (running || fastForwarding) return;
     fastForwarding = true;
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = true; });
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = true; });
     ui.card.hidden = false;
     ui.status.textContent = "SIMULATING";
     ui.message.textContent = `FAST-FORWARD ×${count}`;
@@ -1028,7 +1119,7 @@
       running = false;
       fastForwarding = false;
       fastForwardState = null;
-      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = false; });
+      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
       console.error(error);
       syncUI();
       ui.status.textContent = "ERROR";
@@ -1055,7 +1146,7 @@
     ui.status.textContent = "READY";
     ui.message.textContent = `READY AFTER ${state.count} SIMULATIONS`;
     ui.start.textContent = "Run next episode";
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = false; });
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
     fastForwarding = false;
     fastForwardState = null;
     syncUI();
@@ -1246,6 +1337,7 @@
     setBar(ui.motorUp, neural.motorUp); setBar(ui.motorDown, neural.motorDown);
     setBar(ui.spontaneous, Math.max(Math.abs(neural.spontaneousX), Math.abs(neural.spontaneousY)));
     setBar(ui.frontLimb, neural.frontLimb); setBar(ui.dopamine, neural.dopamine);
+    syncCourseModeUI();
   }
 
   function makeMaterial(color, opacity = 1) {
@@ -1581,6 +1673,15 @@
   ui.start.addEventListener("click", startEpisode);
   ui.run.addEventListener("click", startEpisode);
   ui.resetLearning.addEventListener("click", resetLearning);
+  ui.courseMode.addEventListener("change", () => {
+    if (running || fastForwarding) {
+      syncCourseModeUI();
+      return;
+    }
+    courseMode = ui.courseMode.value;
+    resetEpisode();
+    syncCourseModeUI();
+  });
   ui.skip5.addEventListener("click", () => fastForwardEpisodes(5));
   ui.skip10.addEventListener("click", () => fastForwardEpisodes(10));
   ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));

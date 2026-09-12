@@ -90,6 +90,10 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .control-panel { border-color: var(--line); }
 .control-copy p, .control-list, footer { color: var(--muted); }
 .training-jump { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.course-choice { display: grid; gap: 0.28rem; margin-top: 0.8rem; padding-top: 0.8rem; border-top: 1px solid var(--line); }
+.course-choice label { color: var(--blue); font-size: 0.65rem; font-weight: 850; letter-spacing: 0.09em; }
+.course-choice select { max-width: 30rem; min-height: 2rem; border: 1px solid #45637e; background: #091423; color: var(--ink); font: inherit; padding: 0.25rem 0.45rem; }
+.course-choice small { color: var(--muted); font-size: 0.72rem; }
 .training-jump > div:first-child { display: grid; gap: 0.2rem; }
 .training-jump strong { color: var(--blue); font-size: 0.65rem; letter-spacing: 0.09em; }
 .training-jump small { color: var(--muted); font-size: 0.72rem; }
