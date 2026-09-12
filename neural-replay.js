@@ -575,10 +575,24 @@
         if (count >= 2 && weight > 0.35) components.push({ weight, centroidX, centroidY, count });
       }
     }
-    components.sort((a, b) => b.count - a.count || b.weight - a.weight);
-    let nearestRing = components[0] || null;
-    if (retinalTrackX !== null && retinalTrackY !== null && components.length) {
-      const trackedCandidates = components
+    const mergedComponents = [];
+    for (const component of components) {
+      const componentX = component.centroidX / component.weight;
+      const componentY = component.centroidY / component.weight;
+      const mergeTarget = mergedComponents.find((candidate) => Math.hypot(candidate.centroidX / candidate.weight - componentX, candidate.centroidY / candidate.weight - componentY) <= 10);
+      if (!mergeTarget) {
+        mergedComponents.push({ ...component });
+      } else {
+        mergeTarget.centroidX += component.centroidX;
+        mergeTarget.centroidY += component.centroidY;
+        mergeTarget.weight += component.weight;
+        mergeTarget.count += component.count;
+      }
+    }
+    mergedComponents.sort((a, b) => b.count - a.count || b.weight - a.weight);
+    let nearestRing = mergedComponents[0] || null;
+    if (retinalTrackX !== null && retinalTrackY !== null && mergedComponents.length) {
+      const trackedCandidates = mergedComponents
         .map((component) => ({ component, distance: Math.hypot(component.centroidX / component.weight - retinalTrackX, component.centroidY / component.weight - retinalTrackY) }))
         .filter(({ distance }) => distance <= 8)
         .sort((a, b) => (b.component.weight / (1 + b.distance)) - (a.component.weight / (1 + a.distance)));
