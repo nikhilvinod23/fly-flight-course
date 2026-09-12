@@ -878,10 +878,11 @@
     const previousGoalMode = neural.goalMode;
     const ringVisible = input.ringConfidence > 0.12;
     const targetVisible = input.targetConfidence > 0.10;
-    const goalMode = ringVisible ? "ring" : targetVisible ? "target" : "none";
-    const goalErrorX = ringVisible ? input.ringErrorX : targetVisible ? input.targetErrorX : differenceX;
-    const goalErrorY = ringVisible ? input.ringErrorY : targetVisible ? input.targetErrorY : differenceY;
-    const goalConfidence = ringVisible ? input.ringConfidence : targetVisible ? input.targetConfidence : 0;
+    const targetPriority = targetVisible && (input.targetConfidence > input.ringConfidence * 0.58 || input.targetCenter > 0.28);
+    const goalMode = targetPriority ? "target" : ringVisible ? "ring" : targetVisible ? "target" : "none";
+    const goalErrorX = goalMode === "ring" ? input.ringErrorX : goalMode === "target" ? input.targetErrorX : differenceX;
+    const goalErrorY = goalMode === "ring" ? input.ringErrorY : goalMode === "target" ? input.targetErrorY : differenceY;
+    const goalConfidence = goalMode === "ring" ? input.ringConfidence : goalMode === "target" ? input.targetConfidence : 0;
     const goalClosingX = previousGoalMode === goalMode ? Math.abs(neural.goalErrorX) - Math.abs(goalErrorX) : 0;
     const goalClosingY = previousGoalMode === goalMode ? Math.abs(neural.goalErrorY) - Math.abs(goalErrorY) : 0;
     neural.goalMode = goalMode;
@@ -936,6 +937,10 @@
       if (ringVisible && !oracleMode) {
         const visualAlignment = (moveX * input.ringErrorX + moveY * input.ringErrorY) * 0.5;
         policyRewardAccumulator += clamp(visualAlignment * 0.28 * input.ringConfidence, -0.2, 0.2);
+      }
+      if (targetVisible && !oracleMode) {
+        const targetAlignmentReward = (moveX * input.targetErrorX + moveY * input.targetErrorY) * 0.5;
+        policyRewardAccumulator += clamp(targetAlignmentReward * 0.16 * input.targetConfidence, -0.12, 0.12);
       }
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
