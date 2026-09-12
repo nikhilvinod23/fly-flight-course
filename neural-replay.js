@@ -53,9 +53,9 @@
   const Q_STATE_COUNT = Q_PHASE_BINS * Q_POSITION_BINS * Q_POSITION_BINS * Q_SIZE_BINS * Q_VELOCITY_BINS * Q_VELOCITY_BINS;
   const Q_ALPHA = 0.2;
   const Q_GAMMA = 0.92;
-  const Q_EPSILON_START = 0.34;
-  const Q_EPSILON_FLOOR = 0.06;
-  const Q_EPSILON_DECAY = 260;
+  const Q_EPSILON_START = 0.22;
+  const Q_EPSILON_FLOOR = 0.04;
+  const Q_EPSILON_DECAY = 120;
   const Q_REPLAY_CAPACITY = 6000;
   const Q_REPLAY_UPDATES_PER_STEP = 4;
   const FIRE_POSITION_BINS = 5;
@@ -490,7 +490,7 @@
           targetWeight += 1;
           targetCentroidX += x;
           targetCentroidY += y;
-        } else if (chroma > 0.18 && luminance > 0.16) {
+        } else if (chroma > 0.27 && luminance > 0.28) {
           const ringPixelWeight = chroma * (0.55 + luminance);
           ringWeight += ringPixelWeight;
           ringCentroidX += x * ringPixelWeight;
@@ -572,7 +572,7 @@
         if (count >= 2 && weight > 0.35) components.push({ weight, centroidX, centroidY, count });
       }
     }
-    components.sort((a, b) => b.weight - a.weight);
+    components.sort((a, b) => b.count - a.count || b.weight - a.weight);
     let nearestRing = components[0] || null;
     if (retinalTrackX !== null && retinalTrackY !== null && components.length) {
       const trackedCandidates = components
