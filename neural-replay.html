@@ -104,16 +104,17 @@
         <div class="control-overview">
           <div class="control-copy">
             <h2>Closed-loop 3D neural replay</h2>
-            <p>The game camera is reduced to a tiny retinal image. A joint movement policy learns from ring distance, retinal position, motion, and course feedback across the full ten-ring episode.</p>
+            <p>The game camera is reduced to a tiny retinal image. Independent horizontal and vertical policies learn from retinal ring position, apparent motion, and delayed gate outcomes across the full ten-ring episode.</p>
           </div>
           <div class="control-list" aria-label="Neural replay information">
             <span>48 × 27 camera image supplies visual activity</span>
             <span>Retinal ring position, apparent size, and motion form the policy state</span>
-            <span>A recurrent actor outputs continuous 2D motor drive and a firing decision</span>
-            <span>Target alignment reinforces movement and firing separately</span>
-            <span>Multi-step returns, prioritized replay, and top-performance rehearsal reinforce progress</span>
+            <span>Independent categorical actors output horizontal and vertical motor drive</span>
+            <span>Axis-specific rewards prevent horizontal and vertical credit from cancelling</span>
+            <span>Clipped on-policy updates and useful elite memories reinforce ring progress</span>
+            <span>Adaptive exploration falls as the learned policy improves</span>
+            <span>Targets are observational and cannot affect learning in this phase</span>
             <span>Stationary and randomized courses support transfer testing</span>
-            <span>Front-limb activity triggers firing</span>
             <span>NeuroMechFly-derived scanned body mesh</span>
           </div>
         </div>
@@ -135,7 +136,7 @@
           <div class="training-jump">
             <div>
               <strong>FAST-FORWARD TRAINING</strong>
-              <small>Simulate complete episodes, then inspect the learned policy on the next run.</small>
+              <small>Simulate full ring-only training episodes, then inspect the learned visual policy on the next run.</small>
             </div>
             <div class="button-row compact">
               <button id="skip-5" class="secondary" type="button">Skip 5</button>
@@ -195,13 +196,13 @@
       </section>
 
       <footer>
-        <span>Neural replay v1 · dopamine-style reward scaffold · no full connectome attached</span>
+        <span>Neural replay v1 · ring-only visual reinforcement learner · targets paused during this training phase</span>
         <span>NeuroMechFly body · <a href="limitations.html">experiment limitations &amp; construction</a></span>
       </footer>
     </main>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
-    <script src="neural-replay.js?v=fire-shaping-125267f"></script>
+    <script src="neural-replay.js?v=ring-ppo-20260912c"></script>
   </body>
 </html>

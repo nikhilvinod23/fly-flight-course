@@ -71,6 +71,19 @@
   const POLICY_NOISE_START = 0.34;
   const POLICY_NOISE_FLOOR = 0.12;
   const POLICY_NOISE_DECAY = 150;
+  const RING_POLICY_FEATURES = 19;
+  const RING_POLICY_GAMMA = 0.97;
+  const RING_POLICY_LAMBDA = 0.92;
+  const RING_POLICY_CLIP = 0.18;
+  const RING_POLICY_ACTOR_RATE = 0.004;
+  const RING_POLICY_CRITIC_RATE = 0.018;
+  const RING_POLICY_EPOCHS = 4;
+  const RING_POLICY_ENTROPY = 0.0015;
+  const RING_POLICY_ELITE_RATE = 0.0024;
+  const RING_POLICY_EXPLORATION_START = 0.32;
+  const RING_POLICY_EXPLORATION_FLOOR = 0.025;
+  const RING_POLICY_REGRESSION_MARGIN = 0.65;
+  const RING_POLICY_REGRESSION_PATIENCE = 12;
   const FIRE_POSITION_BINS = 5;
   const FIRE_DEPTH_BINS = 3;
   const FIRE_STATE_COUNT = FIRE_POSITION_BINS * FIRE_POSITION_BINS * FIRE_DEPTH_BINS;
@@ -191,6 +204,22 @@
   let policyReplayBuffer = [];
   let policyUpdates = 0;
   let policyEpisodeReturn = 0;
+  let ringActorX = freshRingActor();
+  let ringActorY = freshRingActor();
+  let ringCriticX = new Array(RING_POLICY_FEATURES).fill(0);
+  let ringCriticY = new Array(RING_POLICY_FEATURES).fill(0);
+  let ringCriticBiasX = 0;
+  let ringCriticBiasY = 0;
+  let ringPolicyAction = [0, 0];
+  let ringPolicyLast = null;
+  let ringPolicyRewardX = 0;
+  let ringPolicyRewardY = 0;
+  let ringPolicyRollout = [];
+  let ringPolicyUpdates = 0;
+  let ringEliteEpisodes = [];
+  let ringBestCheckpoint = null;
+  let ringBestRollingAverage = 0;
+  let ringRegressionCount = 0;
   let evaluationMode = false;
   let oracleMode = false;
   let fireQValues = freshFireQValues();
@@ -243,6 +272,9 @@
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
   function freshActorWeights() { return Array.from({ length: POLICY_OUTPUTS }, () => new Array(POLICY_FEATURE_SIZE).fill(0)); }
+  function freshRingActor() {
+    return { weights: Array.from({ length: ACTIONS.length }, () => new Array(RING_POLICY_FEATURES).fill(0)), bias: new Array(ACTIONS.length).fill(0) };
+  }
   function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0.035]); }
   function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
   function signedBin(value, bins) {
@@ -397,7 +429,197 @@
     policyLastAction = [0, 0, 0];
     policyRewardAccumulator = 0;
     policyRollout = [];
+    ringPolicyAction = [0, 0];
+    ringPolicyLast = null;
+    ringPolicyRewardX = 0;
+    ringPolicyRewardY = 0;
+    ringPolicyRollout = [];
     policyEpisodeReturn = 0;
+  }
+
+  function ringExploration() {
+    if (evaluationMode || oracleMode) return 0;
+    const scheduled = (RING_POLICY_EXPLORATION_START - RING_POLICY_EXPLORATION_FLOOR) * Math.exp(-episode / 55);
+    const lowPerformanceBoost = clamp((2.25 - ringBestRollingAverage) / 2.25, 0, 1) * 0.12;
+    return clamp(RING_POLICY_EXPLORATION_FLOOR + scheduled + lowPerformanceBoost, RING_POLICY_EXPLORATION_FLOOR, 0.4);
+  }
+
+  function ringAxisFeatures(error, confidence, size, movement, closing, ringIndex) {
+    const features = [
+      1,
+      clamp(error, -1, 1),
+      clamp(Math.abs(error), 0, 1),
+      clamp(confidence, 0, 1),
+      clamp(size, 0, 1),
+      clamp(movement, -1, 1),
+      clamp(closing * 5, -1, 1),
+      clamp(error * confidence, -1, 1),
+      clamp(error * size, -1, 1)
+    ];
+    for (let phase = 0; phase < 10; phase += 1) features.push(phase === clamp(ringIndex, 0, 9) ? 1 : 0);
+    return features;
+  }
+
+  function ringSoftmax(logits) {
+    const maximum = Math.max(...logits);
+    const exponentials = logits.map((value) => Math.exp(clamp(value - maximum, -20, 20)));
+    const total = exponentials.reduce((sum, value) => sum + value, 0) || 1;
+    return exponentials.map((value) => value / total);
+  }
+
+  function ringAxisProbabilities(actor, features, exploration = ringExploration()) {
+    const temperature = evaluationMode ? 0.25 : lerp(1, 0.38, clamp(episode / 180, 0, 1));
+    const learned = ringSoftmax(actor.weights.map((weights, index) => (policyDot(weights, features) + actor.bias[index]) / temperature));
+    return learned.map((probability) => probability * (1 - exploration) + exploration / ACTIONS.length);
+  }
+
+  function sampleRingAction(probabilities, deterministic = false) {
+    if (deterministic) {
+      let best = 0;
+      for (let index = 1; index < probabilities.length; index += 1) if (probabilities[index] > probabilities[best]) best = index;
+      return best;
+    }
+    let cursor = randomUnit();
+    for (let index = 0; index < probabilities.length; index += 1) {
+      cursor -= probabilities[index];
+      if (cursor <= 0) return index;
+    }
+    return probabilities.length - 1;
+  }
+
+  function ringValue(weights, bias, features) { return policyDot(weights, features) + bias; }
+
+  function updateRingCritic(axis, features, target) {
+    const isX = axis === "x";
+    const weights = isX ? ringCriticX : ringCriticY;
+    const bias = isX ? ringCriticBiasX : ringCriticBiasY;
+    const error = clamp(target - ringValue(weights, bias, features), -3, 3);
+    for (let index = 0; index < weights.length; index += 1) {
+      weights[index] = clamp(weights[index] + RING_POLICY_CRITIC_RATE * error * features[index], -5, 5);
+    }
+    if (isX) ringCriticBiasX = clamp(bias + RING_POLICY_CRITIC_RATE * error, -5, 5);
+    else ringCriticBiasY = clamp(bias + RING_POLICY_CRITIC_RATE * error, -5, 5);
+  }
+
+  function updateRingActor(actor, transition, axis, advantage) {
+    const features = axis === "x" ? transition.featuresX : transition.featuresY;
+    const actionIndex = axis === "x" ? transition.actionX : transition.actionY;
+    const oldProbability = Math.max(1e-5, axis === "x" ? transition.probabilityX : transition.probabilityY);
+    const probabilities = ringAxisProbabilities(actor, features, transition.exploration);
+    const ratio = probabilities[actionIndex] / oldProbability;
+    const clippedRatio = clamp(ratio, 1 - RING_POLICY_CLIP, 1 + RING_POLICY_CLIP);
+    const useClipped = (advantage >= 0 && ratio > clippedRatio) || (advantage < 0 && ratio < clippedRatio);
+    if (useClipped) return;
+    const actorRate = RING_POLICY_ACTOR_RATE / Math.sqrt(1 + episode / 45);
+    const entropyRate = RING_POLICY_ENTROPY * Math.max(0.12, Math.exp(-episode / 75));
+    const gradientScale = actorRate * clamp(advantage * ratio, -2.5, 2.5);
+    for (let action = 0; action < ACTIONS.length; action += 1) {
+      const logGradient = (action === actionIndex ? 1 : 0) - probabilities[action];
+      const entropyPull = (1 / ACTIONS.length) - probabilities[action];
+      for (let feature = 0; feature < features.length; feature += 1) {
+        actor.weights[action][feature] = clamp(actor.weights[action][feature]
+          + (gradientScale * logGradient + entropyRate * entropyPull) * features[feature], -6, 6);
+      }
+      actor.bias[action] = clamp(actor.bias[action] + gradientScale * logGradient + entropyRate * entropyPull, -6, 6);
+    }
+    ringPolicyUpdates += 1;
+  }
+
+  function cloneRingActor(actor) {
+    return { weights: actor.weights.map((row) => row.slice()), bias: actor.bias.slice() };
+  }
+
+  function restoreRingCheckpoint(checkpoint, blend = 1) {
+    const blendActor = (current, saved) => ({
+      weights: current.weights.map((row, action) => row.map((value, feature) => lerp(value, saved.weights[action][feature], blend))),
+      bias: current.bias.map((value, action) => lerp(value, saved.bias[action], blend))
+    });
+    ringActorX = blendActor(ringActorX, checkpoint.actorX);
+    ringActorY = blendActor(ringActorY, checkpoint.actorY);
+    ringCriticX = ringCriticX.map((value, index) => lerp(value, checkpoint.criticX[index], blend));
+    ringCriticY = ringCriticY.map((value, index) => lerp(value, checkpoint.criticY[index], blend));
+    ringCriticBiasX = lerp(ringCriticBiasX, checkpoint.criticBiasX, blend);
+    ringCriticBiasY = lerp(ringCriticBiasY, checkpoint.criticBiasY, blend);
+  }
+
+  function rehearseRingElites() {
+    ringEliteEpisodes.slice(0, 4).forEach((elite, rank) => {
+      const rate = (RING_POLICY_ELITE_RATE / Math.sqrt(1 + episode / 90)) * (1 - rank * 0.18);
+      elite.transitions.forEach((transition) => {
+        [[ringActorX, "x"], [ringActorY, "y"]].forEach(([actor, axis]) => {
+          const features = axis === "x" ? transition.featuresX : transition.featuresY;
+          const chosen = axis === "x" ? transition.actionX : transition.actionY;
+          const probabilities = ringAxisProbabilities(actor, features, 0);
+          for (let action = 0; action < ACTIONS.length; action += 1) {
+            const gradient = (action === chosen ? 1 : 0) - probabilities[action];
+            for (let feature = 0; feature < features.length; feature += 1) {
+              actor.weights[action][feature] = clamp(actor.weights[action][feature] + rate * gradient * features[feature], -6, 6);
+            }
+            actor.bias[action] = clamp(actor.bias[action] + rate * gradient, -6, 6);
+          }
+        });
+      });
+    });
+  }
+
+  function finishRingPolicyEpisode() {
+    if (ringPolicyLast) {
+      ringPolicyRollout.push({ ...ringPolicyLast, rewardX: clamp(ringPolicyRewardX, -3, 3), rewardY: clamp(ringPolicyRewardY, -3, 3) });
+    }
+    if (!evaluationMode && ringPolicyRollout.length) {
+      let gaeX = 0;
+      let gaeY = 0;
+      for (let index = ringPolicyRollout.length - 1; index >= 0; index -= 1) {
+        const transition = ringPolicyRollout[index];
+        const next = ringPolicyRollout[index + 1];
+        const nextValueX = next ? next.valueX : 0;
+        const nextValueY = next ? next.valueY : 0;
+        const deltaX = transition.rewardX + RING_POLICY_GAMMA * nextValueX - transition.valueX;
+        const deltaY = transition.rewardY + RING_POLICY_GAMMA * nextValueY - transition.valueY;
+        gaeX = deltaX + RING_POLICY_GAMMA * RING_POLICY_LAMBDA * gaeX;
+        gaeY = deltaY + RING_POLICY_GAMMA * RING_POLICY_LAMBDA * gaeY;
+        transition.advantageX = clamp(gaeX, -4, 4);
+        transition.advantageY = clamp(gaeY, -4, 4);
+        transition.targetX = clamp(transition.valueX + gaeX, -8, 8);
+        transition.targetY = clamp(transition.valueY + gaeY, -8, 8);
+      }
+      for (let epochIndex = 0; epochIndex < RING_POLICY_EPOCHS; epochIndex += 1) {
+        ringPolicyRollout.forEach((transition) => {
+          updateRingCritic("x", transition.featuresX, transition.targetX);
+          updateRingCritic("y", transition.featuresY, transition.targetY);
+          updateRingActor(ringActorX, transition, "x", transition.advantageX);
+          updateRingActor(ringActorY, transition, "y", transition.advantageY);
+        });
+      }
+      const useful = ringPolicyRollout.filter((transition) => transition.progressX > 0.004 || transition.progressY > 0.004 || transition.rewardX > 0.5 || transition.rewardY > 0.5);
+      if (episodeRingHits > 0 && useful.length) {
+        ringEliteEpisodes.push({ rings: episodeRingHits, transitions: useful.map((transition) => ({ ...transition, featuresX: transition.featuresX.slice(), featuresY: transition.featuresY.slice() })) });
+        ringEliteEpisodes.sort((a, b) => b.rings - a.rings);
+        ringEliteEpisodes = ringEliteEpisodes.slice(0, TOP_PERFORMANCE_COUNT);
+        rehearseRingElites();
+      }
+      const projectedHistory = ringHistory.slice(-9).concat(episodeRingHits);
+      const rollingAverage = average(projectedHistory);
+      if (projectedHistory.length >= 10 && rollingAverage > ringBestRollingAverage + 0.02) {
+        ringBestRollingAverage = rollingAverage;
+        ringBestCheckpoint = {
+          actorX: cloneRingActor(ringActorX), actorY: cloneRingActor(ringActorY),
+          criticX: ringCriticX.slice(), criticY: ringCriticY.slice(), criticBiasX: ringCriticBiasX, criticBiasY: ringCriticBiasY
+        };
+        ringRegressionCount = 0;
+      } else if (ringBestCheckpoint && projectedHistory.length >= 10 && rollingAverage < ringBestRollingAverage - RING_POLICY_REGRESSION_MARGIN) {
+        ringRegressionCount += 1;
+        if (ringRegressionCount >= RING_POLICY_REGRESSION_PATIENCE) {
+          restoreRingCheckpoint(ringBestCheckpoint, 0.8);
+          ringRegressionCount = 0;
+        }
+      } else ringRegressionCount = Math.max(0, ringRegressionCount - 1);
+    }
+    ringPolicyLast = null;
+    ringPolicyAction = [0, 0];
+    ringPolicyRewardX = 0;
+    ringPolicyRewardY = 0;
+    ringPolicyRollout = [];
   }
   function updateFireValue(nextState, terminal = false) {
     if (fireState === null || evaluationMode) return;
@@ -548,6 +770,11 @@
     policyAction = [0, 0, 0];
     policyRewardAccumulator = 0;
     policyRollout = [];
+    ringPolicyAction = [0, 0];
+    ringPolicyLast = null;
+    ringPolicyRewardX = 0;
+    ringPolicyRewardY = 0;
+    ringPolicyRollout = [];
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     fireEligibility = 0;
@@ -589,6 +816,22 @@
     policyReplayBuffer = [];
     policyUpdates = 0;
     policyEpisodeReturn = 0;
+    ringActorX = freshRingActor();
+    ringActorY = freshRingActor();
+    ringCriticX = new Array(RING_POLICY_FEATURES).fill(0);
+    ringCriticY = new Array(RING_POLICY_FEATURES).fill(0);
+    ringCriticBiasX = 0;
+    ringCriticBiasY = 0;
+    ringPolicyAction = [0, 0];
+    ringPolicyLast = null;
+    ringPolicyRewardX = 0;
+    ringPolicyRewardY = 0;
+    ringPolicyRollout = [];
+    ringPolicyUpdates = 0;
+    ringEliteEpisodes = [];
+    ringBestCheckpoint = null;
+    ringBestRollingAverage = 0;
+    ringRegressionCount = 0;
     fireQValues = freshFireQValues();
     qState = null;
     qActionIndex = 4;
@@ -614,7 +857,7 @@
     episode = 0;
     resetEpisode();
     drawTrainingGraph();
-    ui.learning.textContent = "Joint Q policy is untrained. The fly is exploring the full course.";
+    ui.learning.textContent = "Ring-only visual policy is untrained. The fly is exploring the full course.";
     syncCourseModeUI();
   }
 
@@ -866,7 +1109,7 @@
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
   }
 
-  function buildNeuralController(dt) {
+  function buildLegacyNeuralController(dt) {
     const input = updateRetinaFromCamera();
     const visualMix = 1 - Math.exp(-dt * 12);
     neural.visualLeft = lerp(neural.visualLeft, input.left, visualMix);
@@ -999,6 +1242,97 @@
     neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
   }
 
+  function buildNeuralController(dt) {
+    const input = updateRetinaFromCamera();
+    const visualMix = 1 - Math.exp(-dt * 12);
+    neural.visualLeft = lerp(neural.visualLeft, input.left, visualMix);
+    neural.visualRight = lerp(neural.visualRight, input.right, visualMix);
+    neural.visualUp = lerp(neural.visualUp, input.up, visualMix);
+    neural.visualDown = lerp(neural.visualDown, input.down, visualMix);
+
+    const ringVisible = input.ringConfidence > 0.08 && nextRingIndex < rings.length;
+    const errorX = ringVisible ? input.ringErrorX : 0;
+    const errorY = ringVisible ? input.ringErrorY : 0;
+    neural.goalMode = ringVisible ? "ring" : "none";
+    neural.goalErrorX = errorX;
+    neural.goalErrorY = errorY;
+    neural.goalConfidence = ringVisible ? input.ringConfidence : 0;
+
+    neural.decisionTimer -= dt;
+    if (neural.decisionTimer <= 0) {
+      const sameRing = ringPolicyLast && ringPolicyLast.ringIndex === nextRingIndex;
+      const progressX = sameRing ? Math.abs(ringPolicyLast.errorX) - Math.abs(errorX) : 0;
+      const progressY = sameRing ? Math.abs(ringPolicyLast.errorY) - Math.abs(errorY) : 0;
+      const closingX = sameRing ? progressX : 0;
+      const closingY = sameRing ? progressY : 0;
+
+      if (ringPolicyLast) {
+        const confidence = sameRing ? clamp((ringPolicyLast.confidence + input.ringConfidence) * 0.5, 0, 1) : 0;
+        const denseX = sameRing ? clamp(progressX * 3.2 * (0.35 + confidence), -0.35, 0.35) : 0;
+        const denseY = sameRing ? clamp(progressY * 3.2 * (0.35 + confidence), -0.35, 0.35) : 0;
+        const centerX = sameRing && Math.abs(errorX) < 0.18 ? 0.018 * confidence : 0;
+        const centerY = sameRing && Math.abs(errorY) < 0.18 ? 0.018 * confidence : 0;
+        ringPolicyRollout.push({
+          ...ringPolicyLast,
+          progressX,
+          progressY,
+          rewardX: clamp(ringPolicyRewardX + denseX + centerX - Math.abs(ringPolicyLast.moveX) * 0.004, -3, 3),
+          rewardY: clamp(ringPolicyRewardY + denseY + centerY - Math.abs(ringPolicyLast.moveY) * 0.004, -3, 3)
+        });
+        ringPolicyRewardX = 0;
+        ringPolicyRewardY = 0;
+      }
+
+      const featuresX = ringAxisFeatures(errorX, input.ringConfidence, input.ringSize, neural.moveX, closingX, nextRingIndex);
+      const featuresY = ringAxisFeatures(errorY, input.ringConfidence, input.ringSize, neural.moveY, closingY, nextRingIndex);
+      const exploration = ringExploration();
+      const probabilitiesX = ringAxisProbabilities(ringActorX, featuresX, exploration);
+      const probabilitiesY = ringAxisProbabilities(ringActorY, featuresY, exploration);
+      const actionX = sampleRingAction(probabilitiesX, evaluationMode);
+      const actionY = sampleRingAction(probabilitiesY, evaluationMode);
+      ringPolicyAction = [ACTIONS[actionX], ACTIONS[actionY]];
+      ringPolicyLast = {
+        featuresX,
+        featuresY,
+        actionX,
+        actionY,
+        probabilityX: probabilitiesX[actionX],
+        probabilityY: probabilitiesY[actionY],
+        exploration,
+        valueX: ringValue(ringCriticX, ringCriticBiasX, featuresX),
+        valueY: ringValue(ringCriticY, ringCriticBiasY, featuresY),
+        errorX,
+        errorY,
+        confidence: input.ringConfidence,
+        ringIndex: nextRingIndex,
+        moveX: ringPolicyAction[0],
+        moveY: ringPolicyAction[1]
+      };
+      neural.decisionTimer = 0.12;
+    }
+
+    const activeRing = rings[nextRingIndex];
+    const oracleMoveX = activeRing ? clamp((activeRing.x - player.x) / 118, -1, 1) : 0;
+    const oracleMoveY = activeRing ? clamp((activeRing.y - player.y) / 118, -1, 1) : 0;
+    const targetX = oracleMode ? oracleMoveX : ringPolicyAction[0];
+    const targetY = oracleMode ? oracleMoveY : ringPolicyAction[1];
+    const motorMix = 1 - Math.exp(-dt * 5.5);
+    neural.moveX = lerp(neural.moveX, clamp(targetX, -1, 1), motorMix);
+    neural.moveY = lerp(neural.moveY, clamp(targetY, -1, 1), motorMix);
+    const readoutMix = 1 - Math.exp(-dt * 9);
+    neural.motorLeft = lerp(neural.motorLeft, Math.max(0, -neural.moveX), readoutMix);
+    neural.motorRight = lerp(neural.motorRight, Math.max(0, neural.moveX), readoutMix);
+    neural.motorUp = lerp(neural.motorUp, Math.max(0, neural.moveY), readoutMix);
+    neural.motorDown = lerp(neural.motorDown, Math.max(0, -neural.moveY), readoutMix);
+
+    // Shooting is deliberately observational during ring training: targets can be
+    // seen, but they cannot change steering, reward, elite ranking, or the policy.
+    const targetVisual = input.targetConfidence * (1 - clamp((Math.abs(input.targetErrorX) + Math.abs(input.targetErrorY)) * 0.5, 0, 1));
+    neural.frontLimb = lerp(neural.frontLimb, targetVisual * 0.25, 1 - Math.exp(-dt * 12));
+    neural.fireCooldown = Math.max(0, neural.fireCooldown - dt);
+    neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
+  }
+
   function reinforcePreference(preferences, delta, eligibility) {
     for (let context = 0; context < preferences.length; context += 1) {
       for (let index = 0; index < ACTIONS.length; index += 1) {
@@ -1101,7 +1435,7 @@
     const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
     const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
     const currentHits = rings.filter((ring) => ring.result === "hit").length;
-    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · recurrent actor-critic · noise ${policyNoise().toFixed(2)} · value updates ${policyUpdates} · top memories ${topPerformances.length}.`;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · ring-only PPO · exploration ${ringExploration().toFixed(2)} · policy updates ${ringPolicyUpdates} · elite memories ${ringEliteEpisodes.length} · best 10-ep avg ${ringBestRollingAverage.toFixed(1)}.`;
   }
 
   function getGraphWindow() {
@@ -1319,7 +1653,8 @@
 
   function applyMovementReward(rewardX, rewardY, color = null) {
     const reward = (rewardX + rewardY) * 0.5;
-    policyRewardAccumulator += reward;
+    ringPolicyRewardX += rewardX;
+    ringPolicyRewardY += rewardY;
     lastReward = reward;
     rewardFlash = reward > 0 ? 0.65 : -0.55;
     rewardColor = color || (reward > 0 ? COLORS.green : COLORS.red);
@@ -1380,8 +1715,9 @@
       const radius = RING_RADIUS - RING_CLEARANCE;
       const xQuality = 1 - clamp(horizontalError / radius, 0, 1);
       const yQuality = 1 - clamp(verticalError / radius, 0, 1);
-      const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
-      const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
+      const progressWeight = 1 + nextRingIndex * 0.1;
+      const rewardX = progressWeight * (success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.22 - 0.12 : RING_MISS_REWARD);
+      const rewardY = progressWeight * (success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.22 - 0.12 : RING_MISS_REWARD);
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
       nextRingIndex += 1;
       retinalTrackX = null;
@@ -1391,7 +1727,6 @@
       if (!target.hit && !target.missed && player.z > target.z + 75) {
         target.missed = true;
         if (target === targets[nextTargetIndex]) {
-          applyFireReward(TARGET_MISS_REWARD, COLORS.red);
           nextTargetIndex += 1;
         }
       }
@@ -1414,7 +1749,7 @@
     const wasEvaluation = evaluationMode;
     const wasOracle = oracleMode;
     running = false;
-    finishPolicyEpisode();
+    finishRingPolicyEpisode();
     evaluationMode = false;
     oracleMode = false;
     if (!wasEvaluation) recordEpisodeStats();
