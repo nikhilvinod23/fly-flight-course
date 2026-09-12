@@ -362,12 +362,22 @@
       transition.returnTarget = nStepTarget;
       transition.policyReturn = returnValue;
       transition.advantage = advantage;
+    }
+    const advantageMean = policyRollout.length
+      ? policyRollout.reduce((sum, transition) => sum + transition.advantage, 0) / policyRollout.length
+      : 0;
+    const advantageVariance = policyRollout.length
+      ? policyRollout.reduce((sum, transition) => sum + (transition.advantage - advantageMean) ** 2, 0) / policyRollout.length
+      : 0;
+    const advantageScale = Math.sqrt(advantageVariance) + 0.15;
+    policyRollout.forEach((transition) => {
+      transition.normalizedAdvantage = clamp((transition.advantage - advantageMean) / advantageScale, -2.5, 2.5);
       if (!evaluationMode) {
-        updateCritic(transition.features, nStepTarget);
-        updateActor(transition, advantage);
+        updateCritic(transition.features, transition.returnTarget);
+        updateActor(transition, transition.normalizedAdvantage, 0.7);
         pushPolicyTransition(transition);
       }
-    }
+    });
     if (!evaluationMode) {
       replayPolicyCritic();
       const score = episodeRingHits + targets.filter((target) => target.hit).length * 1.5;
