@@ -63,8 +63,8 @@
   const POLICY_FEATURE_SIZE = POLICY_BASE_FEATURES + POLICY_MEMORY_SIZE;
   const POLICY_OUTPUTS = 3;
   const POLICY_GAMMA = 0.96;
-  const POLICY_ACTOR_RATE = 0.0045;
-  const POLICY_CRITIC_RATE = 0.055;
+  const POLICY_ACTOR_RATE = 0.0018;
+  const POLICY_CRITIC_RATE = 0.035;
   const POLICY_REPLAY_CAPACITY = 12000;
   const POLICY_REPLAY_UPDATES = 5;
   const POLICY_N_STEP = 5;
@@ -892,12 +892,23 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
+      const features = buildPolicyFeatures(input);
       if (policyLastFeatures) {
-        policyRollout.push({ features: policyLastFeatures.slice(), means: policyLastMeans.slice(), action: policyLastAction.slice(), sigma: policyLastSigma, reward: clamp(policyRewardAccumulator, -2, 2) });
-        policyEpisodeReturn += policyRewardAccumulator;
+        const transition = { features: policyLastFeatures.slice(), means: policyLastMeans.slice(), action: policyLastAction.slice(), sigma: policyLastSigma, reward: clamp(policyRewardAccumulator, -2, 2) };
+        const tdTarget = transition.reward + POLICY_GAMMA * criticValue(features, true);
+        const tdError = clamp(tdTarget - criticValue(transition.features), -3, 3);
+        transition.returnTarget = tdTarget;
+        transition.advantage = tdError;
+        policyRollout.push(transition);
+        policyEpisodeReturn += transition.reward;
+        if (!evaluationMode) {
+          updateCritic(transition.features, tdTarget, POLICY_CRITIC_RATE * 0.75);
+          updateActor(transition, tdError, 0.55);
+          pushPolicyTransition(transition);
+          replayPolicyCritic();
+        }
         policyRewardAccumulator = 0;
       }
-      const features = buildPolicyFeatures(input);
       const means = policyMeans(features);
       const sigma = policyNoise();
       const moveX = evaluationMode ? means[0] : clamp(means[0] + policyNormalSample(sigma), -1, 1);
