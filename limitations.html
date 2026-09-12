@@ -20,7 +20,7 @@
         <article>
           <p class="note-index">01 / CONSTRUCTION</p>
           <h2>What the replay does</h2>
-          <p>The game renders a forward flight course. Each frame is reduced to a small 48 × 27 image that stands in for a fly-facing visual sensor. Independent horizontal and vertical categorical policies choose movement from retinal ring error, confidence, apparent size, motion, and ring phase. Progress and gate outcomes provide axis-specific delayed reward. Stationary mode repeats one course for learning tests; randomized mode varies the ring layout to test transfer.</p>
+          <p>The game renders a forward flight course. Each frame is reduced to a small 48 × 27 image that stands in for a fly-facing visual sensor. Independent horizontal and vertical categorical policies choose movement from retinal ring error, confidence, apparent size, motion, and ring phase. A separate binary policy maps retinal target alignment to a front-limb firing event. Ring progress and target hits train their respective policies without sharing rewards. Stationary mode repeats one course for learning tests; randomized mode varies the ring layout to test transfer.</p>
           <p>The 3D body is a browser display based on simplified NeuroMechFly body meshes. The small brain panel now uses the low-poly JRC2018U adult Drosophila atlas surface, with grouped visual, motor, front-limb, and dopamine-like activity markers layered on top.</p>
         </article>
         <article>
@@ -31,7 +31,7 @@
             <li>The four visual channels are aggregated signals, not individual ommatidia or reconstructed visual neurons.</li>
             <li>The JRC2018U surface is an atlas average; the activity locations are still schematic pathway overlays, not measured firing locations.</li>
             <li>The clipped policy-gradient learner, value baselines, elite memory, and dopamine-like reward display are machine-learning abstractions, not demonstrated biological dopamine plasticity.</li>
-            <li>Targets are visible but are intentionally excluded from steering, reward, and learning while ring behavior is being validated.</li>
+            <li>The firing policy is a machine-learning abstraction of a front-limb decision, not a reconstructed leg premotor circuit. A small target-alignment movement is enabled only in course gaps and is intentionally capped to limit interference with ring steering.</li>
             <li>Training episodes remain stochastic. The moving average should trend upward, but individual episode scores are not expected to increase monotonically.</li>
             <li>The body animation has no aerodynamic, muscle, contact, or wingbeat physics.</li>
             <li>The body and brain references combine assets from different fly datasets and should not be interpreted as one exact individual.</li>

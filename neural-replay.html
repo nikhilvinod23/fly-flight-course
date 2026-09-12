@@ -104,7 +104,7 @@
         <div class="control-overview">
           <div class="control-copy">
             <h2>Closed-loop 3D neural replay</h2>
-            <p>The game camera is reduced to a tiny retinal image. Independent horizontal and vertical policies learn from retinal ring position, apparent motion, and delayed gate outcomes across the full ten-ring episode.</p>
+            <p>The game camera is reduced to a tiny retinal image. Independent steering policies learn the ring course while a separate front-limb policy learns when retinal target alignment should trigger a shot.</p>
           </div>
           <div class="control-list" aria-label="Neural replay information">
             <span>48 × 27 camera image supplies visual activity</span>
@@ -113,7 +113,8 @@
             <span>Axis-specific rewards prevent horizontal and vertical credit from cancelling</span>
             <span>Clipped on-policy updates and useful elite memories reinforce ring progress</span>
             <span>Adaptive exploration falls as the learned policy improves</span>
-            <span>Targets are observational and cannot affect learning in this phase</span>
+            <span>A separate firing policy learns only from retinal target alignment and shot outcomes</span>
+            <span>A small learned target-alignment response is gated to safe gaps between rings</span>
             <span>Stationary and randomized courses support transfer testing</span>
             <span>NeuroMechFly-derived scanned body mesh</span>
           </div>
@@ -136,7 +137,7 @@
           <div class="training-jump">
             <div>
               <strong>FAST-FORWARD TRAINING</strong>
-              <small>Simulate full ring-only training episodes, then inspect the learned visual policy on the next run.</small>
+              <small>Simulate complete steering and shooting episodes, then inspect both learned policies on the next run.</small>
             </div>
             <div class="button-row compact">
               <button id="skip-5" class="secondary" type="button">Skip 5</button>
@@ -180,8 +181,10 @@
             <span><i class="graph-rings-average"></i>RINGS 10-EP AVG</span>
             <span><i class="graph-shots"></i>SHOTS MADE / 2</span>
             <span><i class="graph-shots-average"></i>SHOTS 10-EP AVG</span>
-            <span><i class="graph-stationary"></i>STATIONARY MAP</span>
-            <span><i class="graph-randomized"></i>RANDOMIZED MAP</span>
+            <span><i class="graph-stationary"></i>RING · STATIONARY</span>
+            <span><i class="graph-randomized"></i>RING · RANDOMIZED</span>
+            <span><i class="graph-shot-stationary"></i>SHOT · STATIONARY</span>
+            <span><i class="graph-shot-randomized"></i>SHOT · RANDOMIZED</span>
           </div>
           <div class="training-stats" aria-label="Training history statistics">
             <div><span>RECORD RINGS</span><strong id="stat-record-rings">0</strong></div>
@@ -198,13 +201,13 @@
       </section>
 
       <footer>
-        <span>Neural replay v1 · ring-only visual reinforcement learner · targets paused during this training phase</span>
+        <span>Neural replay v1 · independent retinal steering and front-limb firing policies</span>
         <span>NeuroMechFly body · <a href="limitations.html">experiment limitations &amp; construction</a></span>
       </footer>
     </main>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
-    <script src="neural-replay.js?v=graph-modes-20260912"></script>
+    <script src="neural-replay.js?v=shot-policy-20260912g"></script>
   </body>
 </html>

@@ -84,6 +84,13 @@
   const RING_POLICY_EXPLORATION_FLOOR = 0.025;
   const RING_POLICY_REGRESSION_MARGIN = 0.65;
   const RING_POLICY_REGRESSION_PATIENCE = 12;
+  const SHOT_POLICY_FEATURES = 12;
+  const SHOT_POLICY_CLIP = 0.2;
+  const SHOT_POLICY_ACTOR_RATE = 0.003;
+  const SHOT_POLICY_CRITIC_RATE = 0.02;
+  const SHOT_POLICY_EPOCHS = 4;
+  const SHOT_POLICY_EXPLORATION_START = 0.32;
+  const SHOT_POLICY_EXPLORATION_FLOOR = 0.03;
   const FIRE_POSITION_BINS = 5;
   const FIRE_DEPTH_BINS = 3;
   const FIRE_STATE_COUNT = FIRE_POSITION_BINS * FIRE_POSITION_BINS * FIRE_DEPTH_BINS;
@@ -140,7 +147,7 @@
   const baseRingAngles = [-0.18, 0.52, -0.86, 0.28, 1.12, -0.42, 0.74, -1.02, 0.36, -0.64];
   const baseRingSquash = [0.72, 0.5, 0.82, 0.58, 0.68, 0.46, 0.76, 0.55, 0.84, 0.62];
   let rings = [];
-  const targetBlueprint = [{ x: 35, y: -145, z: 1600 }, { x: -85, y: 145, z: 4600 }];
+  const targetBlueprint = [{ x: 85, y: -10, z: 1600 }, { x: -75, y: 45, z: 4250 }];
   const stars = Array.from({ length: 95 }, (_, index) => ({
     x: ((index * 83) % 997) / 997, y: ((index * 47 + 19) % 541) / 541,
     size: index % 7 === 0 ? 2 : 1, phase: (index * 0.37) % 1
@@ -220,6 +227,14 @@
   let ringBestCheckpoint = null;
   let ringBestRollingAverage = 0;
   let ringRegressionCount = 0;
+  let shotActor = freshShotActor();
+  let shotCritic = new Array(SHOT_POLICY_FEATURES).fill(0);
+  let shotCriticBias = 0;
+  let shotDecisionTimer = 0;
+  let shotPolicyRollout = [];
+  let shotPolicyUpdates = 0;
+  let shotEliteMemory = [];
+  let shotAlignmentGain = 0.04;
   let evaluationMode = false;
   let oracleMode = false;
   let fireQValues = freshFireQValues();
@@ -275,6 +290,9 @@
   function freshActorWeights() { return Array.from({ length: POLICY_OUTPUTS }, () => new Array(POLICY_FEATURE_SIZE).fill(0)); }
   function freshRingActor() {
     return { weights: Array.from({ length: ACTIONS.length }, () => new Array(RING_POLICY_FEATURES).fill(0)), bias: new Array(ACTIONS.length).fill(0) };
+  }
+  function freshShotActor() {
+    return { weights: Array.from({ length: 2 }, () => new Array(SHOT_POLICY_FEATURES).fill(0)), bias: [0, -0.4] };
   }
   function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0.035]); }
   function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
@@ -435,6 +453,8 @@
     ringPolicyRewardX = 0;
     ringPolicyRewardY = 0;
     ringPolicyRollout = [];
+    shotDecisionTimer = 0;
+    shotPolicyRollout = [];
     policyEpisodeReturn = 0;
   }
 
@@ -622,6 +642,128 @@
     ringPolicyRewardY = 0;
     ringPolicyRollout = [];
   }
+
+  function shotExploration() {
+    if (evaluationMode || oracleMode) return 0;
+    const recent = targetHistory.slice(-10);
+    const recentAverage = recent.length ? average(recent) : 0;
+    const scheduled = (SHOT_POLICY_EXPLORATION_START - SHOT_POLICY_EXPLORATION_FLOOR) * Math.exp(-episode / 48);
+    const lowPerformanceBoost = clamp((0.6 - recentAverage) / 0.6, 0, 1) * 0.1;
+    return clamp(SHOT_POLICY_EXPLORATION_FLOOR + scheduled + lowPerformanceBoost, SHOT_POLICY_EXPLORATION_FLOOR, 0.42);
+  }
+
+  function shotFeatures(input) {
+    const errorRadius = clamp(Math.hypot(input.targetErrorX, input.targetErrorY) / Math.SQRT2, 0, 1);
+    const alignment = clamp(1 - errorRadius, 0, 1) * input.targetConfidence;
+    return [
+      1,
+      input.targetErrorX,
+      input.targetErrorY,
+      Math.abs(input.targetErrorX),
+      Math.abs(input.targetErrorY),
+      input.targetConfidence,
+      input.targetSize,
+      input.targetCenter,
+      alignment,
+      input.targetSize * alignment,
+      clamp(neural.moveX, -1, 1),
+      clamp(neural.moveY, -1, 1)
+    ];
+  }
+
+  function shotProbabilities(features, exploration = shotExploration()) {
+    const temperature = evaluationMode ? 0.24 : lerp(1, 0.34, clamp(episode / 140, 0, 1));
+    const learned = ringSoftmax(shotActor.weights.map((weights, action) => (policyDot(weights, features) + shotActor.bias[action]) / temperature));
+    return learned.map((probability) => probability * (1 - exploration) + exploration / 2);
+  }
+
+  function sampleShotAction(probabilities) {
+    if (evaluationMode) return probabilities[1] > probabilities[0] ? 1 : 0;
+    return randomUnit() < probabilities[1] ? 1 : 0;
+  }
+
+  function updateShotCritic(transition) {
+    const value = policyDot(shotCritic, transition.features) + shotCriticBias;
+    const error = clamp(transition.target - value, -3, 3);
+    for (let feature = 0; feature < shotCritic.length; feature += 1) {
+      shotCritic[feature] = clamp(shotCritic[feature] + SHOT_POLICY_CRITIC_RATE * error * transition.features[feature], -5, 5);
+    }
+    shotCriticBias = clamp(shotCriticBias + SHOT_POLICY_CRITIC_RATE * error, -5, 5);
+  }
+
+  function updateShotActor(transition) {
+    const probabilities = shotProbabilities(transition.features, transition.exploration);
+    const oldProbability = Math.max(1e-5, transition.probability);
+    const ratio = probabilities[transition.action] / oldProbability;
+    const clippedRatio = clamp(ratio, 1 - SHOT_POLICY_CLIP, 1 + SHOT_POLICY_CLIP);
+    const useClipped = (transition.advantage >= 0 && ratio > clippedRatio)
+      || (transition.advantage < 0 && ratio < clippedRatio);
+    if (useClipped) return;
+    const rate = SHOT_POLICY_ACTOR_RATE / Math.sqrt(1 + episode / 55);
+    const gradientScale = rate * clamp(transition.advantage * ratio, -2.5, 2.5);
+    for (let action = 0; action < 2; action += 1) {
+      const gradient = (action === transition.action ? 1 : 0) - probabilities[action];
+      for (let feature = 0; feature < transition.features.length; feature += 1) {
+        shotActor.weights[action][feature] = clamp(shotActor.weights[action][feature] + gradientScale * gradient * transition.features[feature], -6, 6);
+      }
+      shotActor.bias[action] = clamp(shotActor.bias[action] + gradientScale * gradient, -6, 6);
+    }
+    shotPolicyUpdates += 1;
+  }
+
+  function rehearseShotElites() {
+    const rate = 0.006 / Math.sqrt(1 + episode / 100);
+    for (let pass = 0; pass < 2; pass += 1) {
+      shotEliteMemory.forEach((memory, rank) => {
+        const probabilities = shotProbabilities(memory.features, 0);
+        const scale = rate * (1 - rank / Math.max(10, shotEliteMemory.length));
+        for (let action = 0; action < 2; action += 1) {
+          const gradient = (action === 1 ? 1 : 0) - probabilities[action];
+          for (let feature = 0; feature < memory.features.length; feature += 1) {
+            shotActor.weights[action][feature] = clamp(shotActor.weights[action][feature] + scale * gradient * memory.features[feature], -6, 6);
+          }
+          shotActor.bias[action] = clamp(shotActor.bias[action] + scale * gradient, -6, 6);
+        }
+      });
+    }
+  }
+
+  function rewardShotTransition(transition, reward, rememberHit = false) {
+    if (!transition || evaluationMode || oracleMode) return;
+      transition.reward = clamp(transition.reward + reward * 1.35, -2, 3);
+    if (rememberHit) {
+      shotAlignmentGain = clamp(shotAlignmentGain + 0.012, 0.025, 0.14);
+      shotEliteMemory.unshift({ features: transition.features.slice() });
+      shotEliteMemory = shotEliteMemory.slice(0, 20);
+    }
+  }
+
+  function penalizeMissedTarget(targetIndex) {
+    if (evaluationMode || oracleMode) return;
+    const decisions = shotPolicyRollout.filter((transition) => transition.targetIndex === targetIndex).slice(-8);
+    decisions.forEach((transition) => {
+      transition.reward = clamp(transition.reward - (transition.action === 0 ? 0.095 : 0.024), -2, 3);
+    });
+    if (decisions.length) shotAlignmentGain = clamp(shotAlignmentGain - 0.002, 0.025, 0.14);
+  }
+
+  function finishShotPolicyEpisode() {
+    if (!evaluationMode && shotPolicyRollout.length) {
+      shotPolicyRollout.forEach((transition) => {
+        transition.target = clamp(transition.reward, -3, 3);
+        transition.advantage = clamp(transition.target - transition.value, -4, 4);
+      });
+      for (let epochIndex = 0; epochIndex < SHOT_POLICY_EPOCHS; epochIndex += 1) {
+        shotPolicyRollout.forEach((transition) => {
+          updateShotCritic(transition);
+          updateShotActor(transition);
+        });
+      }
+      rehearseShotElites();
+    }
+    shotPolicyRollout = [];
+    shotDecisionTimer = 0;
+  }
   function updateFireValue(nextState, terminal = false) {
     if (fireState === null || evaluationMode) return;
     const current = fireQValues[fireState][fireAction];
@@ -776,6 +918,8 @@
     ringPolicyRewardX = 0;
     ringPolicyRewardY = 0;
     ringPolicyRollout = [];
+    shotDecisionTimer = 0;
+    shotPolicyRollout = [];
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     fireEligibility = 0;
@@ -833,6 +977,14 @@
     ringBestCheckpoint = null;
     ringBestRollingAverage = 0;
     ringRegressionCount = 0;
+    shotActor = freshShotActor();
+    shotCritic = new Array(SHOT_POLICY_FEATURES).fill(0);
+    shotCriticBias = 0;
+    shotDecisionTimer = 0;
+    shotPolicyRollout = [];
+    shotPolicyUpdates = 0;
+    shotEliteMemory = [];
+    shotAlignmentGain = 0.04;
     fireQValues = freshFireQValues();
     qState = null;
     qActionIndex = 4;
@@ -1086,7 +1238,8 @@
       ringSize: clamp(Math.sqrt(selectedRingWeight / 30), 0, 1),
       targetErrorX: clamp((targetColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
       targetErrorY: clamp((RETINA_HEIGHT * 0.5 - targetRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
-      targetConfidence: clamp(targetWeight / 12, 0, 1)
+      targetConfidence: clamp(targetWeight / 12, 0, 1),
+      targetSize: clamp(Math.sqrt(targetWeight / 80), 0, 1)
     };
   }
 
@@ -1314,10 +1467,21 @@
     }
 
     const activeRing = rings[nextRingIndex];
+    const activeTarget = targets[nextTargetIndex];
     const oracleMoveX = activeRing ? clamp((activeRing.x - player.x) / 118, -1, 1) : 0;
     const oracleMoveY = activeRing ? clamp((activeRing.y - player.y) / 118, -1, 1) : 0;
-    const targetX = oracleMode ? oracleMoveX : ringPolicyAction[0];
-    const targetY = oracleMode ? oracleMoveY : ringPolicyAction[1];
+    let targetX = oracleMode ? oracleMoveX : ringPolicyAction[0];
+    let targetY = oracleMode ? oracleMoveY : ringPolicyAction[1];
+    if (!oracleMode && activeTarget && input.targetConfidence > 0.045 && shotAlignmentGain > 0) {
+      const targetDepth = activeTarget.z - player.z;
+      const ringDepth = activeRing ? activeRing.z - player.z : Infinity;
+      const hasSafeGapBeforeRing = targetDepth > 60 && targetDepth < 700 && targetDepth + 140 < ringDepth;
+      if (hasSafeGapBeforeRing) {
+        const residualGain = shotAlignmentGain * input.targetConfidence;
+        targetX += clamp(input.targetErrorX * residualGain, -0.3, 0.3);
+        targetY += clamp(input.targetErrorY * residualGain, -0.3, 0.3);
+      }
+    }
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX, -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY, -1, 1), motorMix);
@@ -1327,11 +1491,44 @@
     neural.motorUp = lerp(neural.motorUp, Math.max(0, neural.moveY), readoutMix);
     neural.motorDown = lerp(neural.motorDown, Math.max(0, -neural.moveY), readoutMix);
 
-    // Shooting is deliberately observational during ring training: targets can be
-    // seen, but they cannot change steering, reward, elite ranking, or the policy.
-    const targetVisual = input.targetConfidence * (1 - clamp((Math.abs(input.targetErrorX) + Math.abs(input.targetErrorY)) * 0.5, 0, 1));
-    neural.frontLimb = lerp(neural.frontLimb, targetVisual * 0.25, 1 - Math.exp(-dt * 12));
     neural.fireCooldown = Math.max(0, neural.fireCooldown - dt);
+    shotDecisionTimer -= dt;
+    const targetVisible = activeTarget && !activeTarget.hit && !activeTarget.missed && input.targetConfidence > 0.045;
+    const targetErrorRadius = Math.hypot(input.targetErrorX, input.targetErrorY) / Math.SQRT2;
+    const targetAlignment = targetVisible ? clamp(1 - targetErrorRadius, 0, 1) * input.targetConfidence : 0;
+    let frontLimbDrive = targetAlignment * 0.18;
+    if (targetVisible && shotDecisionTimer <= 0 && neural.fireCooldown <= 0) {
+      if (oracleMode) {
+        const targetDepth = activeTarget.z - player.z;
+        const worldAlignment = Math.hypot(activeTarget.x - player.x, activeTarget.y - player.y);
+        if (targetDepth > 40 && targetDepth < 480 && worldAlignment < TARGET_HIT_RADIUS * 0.75) fire();
+        frontLimbDrive = worldAlignment < TARGET_HIT_RADIUS ? 1 : 0;
+      } else {
+        const features = shotFeatures(input);
+        const exploration = shotExploration();
+        const probabilities = shotProbabilities(features, exploration);
+        const action = sampleShotAction(probabilities);
+        const fireQuality = targetAlignment * (0.35 + input.targetSize * 0.65);
+        const transition = {
+          features,
+          action,
+          probability: probabilities[action],
+          exploration,
+          value: policyDot(shotCritic, features) + shotCriticBias,
+          reward: action === 1
+            ? clamp((fireQuality - 0.45) * 0.12, -0.06, 0.05)
+            : fireQuality > 0.6 ? -0.03 : 0.004,
+          targetIndex: nextTargetIndex
+        };
+        shotPolicyRollout.push(transition);
+        if (action === 1) {
+          fire(transition);
+          frontLimbDrive = 1;
+        } else frontLimbDrive = probabilities[1] * 0.45;
+      }
+      shotDecisionTimer = 0.16;
+    } else if (!targetVisible) shotDecisionTimer = 0;
+    neural.frontLimb = lerp(neural.frontLimb, frontLimbDrive, 1 - Math.exp(-dt * 15));
     neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
   }
 
@@ -1436,8 +1633,10 @@
   function updateLearningReadout() {
     const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
     const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
+    const recentShots = targetHistory.slice(-MAX_RECENT_EPISODES);
+    const recentShotAverage = recentShots.length ? average(recentShots) : 0;
     const currentHits = rings.filter((ring) => ring.result === "hit").length;
-    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · ring-only PPO · exploration ${ringExploration().toFixed(2)} · policy updates ${ringPolicyUpdates} · elite memories ${ringEliteEpisodes.length} · best 10-ep avg ${ringBestRollingAverage.toFixed(1)}.`;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · shots ${recentShotAverage.toFixed(1)}/2 · ring exploration ${ringExploration().toFixed(2)} · shot exploration ${shotExploration().toFixed(2)} · alignment ${shotAlignmentGain.toFixed(2)} · ring updates ${ringPolicyUpdates} · shot updates ${shotPolicyUpdates}.`;
   }
 
   function getGraphWindow() {
@@ -1605,11 +1804,6 @@
         if (index === 0) trainingCtx.moveTo(x, y); else trainingCtx.lineTo(x, y);
       });
       trainingCtx.stroke();
-      visible.forEach((value, index) => {
-        trainingCtx.beginPath();
-        trainingCtx.arc(xForEpisode(graphWindow.dataStart + index + 1), yFor(value, max), 2.5, 0, Math.PI * 2);
-        trainingCtx.fill();
-      });
     };
     const drawMovingAverage = (values, max, color) => {
       if (values.length < 2) return;
@@ -1629,16 +1823,16 @@
       trainingCtx.stroke();
       trainingCtx.setLineDash([]);
     };
-    const drawCourseModeMarkers = () => {
-      if (!courseModeHistory.length || !ringHistory.length) return;
-      const visible = visibleValues(ringHistory);
+    const drawCourseModeMarkers = (values, max, stationaryColor, randomizedColor) => {
+      if (!courseModeHistory.length || !values.length) return;
+      const visible = visibleValues(values);
       visible.forEach((value, index) => {
         const episodeNumber = graphWindow.dataStart + index + 1;
         const mode = courseModeHistory[episodeNumber - 1] || "stationary";
         const x = xForEpisode(episodeNumber);
-        const y = yFor(value, 10);
+        const y = yFor(value, max);
         trainingCtx.save();
-        trainingCtx.fillStyle = mode === "randomized" ? "#7bd7ff" : "#58d68d";
+        trainingCtx.fillStyle = mode === "randomized" ? randomizedColor : stationaryColor;
         trainingCtx.strokeStyle = "#030914";
         trainingCtx.lineWidth = 1;
         trainingCtx.beginPath();
@@ -1660,7 +1854,8 @@
     if (graphVisibility.shotAverage) drawMovingAverage(targetHistory, 2, "#ffd27b");
     if (graphVisibility.rings) drawSeries(ringHistory, 10, "#58d68d");
     if (graphVisibility.shots) drawSeries(targetHistory, 2, "#f1ad45");
-    drawCourseModeMarkers();
+    if (graphVisibility.rings) drawCourseModeMarkers(ringHistory, 10, "#58d68d", "#7bd7ff");
+    if (graphVisibility.shots) drawCourseModeMarkers(targetHistory, 2, "#f1ad45", "#ef72bd");
     if (graphProbeEpisode !== null && ringHistory.length) {
       const probeEpisode = clamp(graphProbeEpisode, Math.max(1, graphWindow.axisStart), Math.min(ringHistory.length, graphWindow.axisEnd));
       const probeX = xForEpisode(probeEpisode);
@@ -1708,12 +1903,12 @@
     updateLearningReadout();
   }
 
-  function fire() {
+  function fire(shotTransition = null) {
     const target = targets[nextTargetIndex];
     if (!target || neural.fireCooldown > 0) return;
     neural.fireCooldown = 0.28;
     neural.frontLimb = 1;
-    bullets.push({ x: player.x, y: player.y, z: player.z + 50, life: 2.5, age: 0 });
+    bullets.push({ x: player.x, y: player.y, z: player.z + 50, life: 2.5, age: 0, shotTransition });
   }
 
   function updateBullets(dt) {
@@ -1726,7 +1921,11 @@
           target.hit = true;
           bullet.life = 0;
           explosions.push({ x: target.x, y: target.y, z: target.z, life: 0.68 });
-          applyFireReward(TARGET_REWARD, COLORS.amber);
+          rewardShotTransition(bullet.shotTransition, TARGET_REWARD, true);
+          lastReward = TARGET_REWARD;
+          rewardFlash = 0.65;
+          rewardColor = COLORS.amber;
+          neural.dopamine = TARGET_REWARD;
           if (target === targets[nextTargetIndex]) nextTargetIndex += 1;
           break;
         }
@@ -1759,6 +1958,7 @@
     for (const target of targets) {
       if (!target.hit && !target.missed && player.z > target.z + 75) {
         target.missed = true;
+        penalizeMissedTarget(targets.indexOf(target));
         if (target === targets[nextTargetIndex]) {
           nextTargetIndex += 1;
         }
@@ -1783,6 +1983,7 @@
     const wasOracle = oracleMode;
     running = false;
     finishRingPolicyEpisode();
+    finishShotPolicyEpisode();
     evaluationMode = false;
     oracleMode = false;
     if (!wasEvaluation) recordEpisodeStats();
