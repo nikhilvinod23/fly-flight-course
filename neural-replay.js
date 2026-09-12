@@ -484,13 +484,16 @@
         rows[y] += salience;
         const targetPixel = red > 0.5 && blue > 0.55 && green < 0.45
           && Math.abs(red - blue) < 0.23 && red + blue > 1.25;
+        // The rendered body/ship occupies the lower-center retinal field. It
+        // is not an external visual object, so keep it out of ring detection.
+        const selfBodyPixel = x >= 17 && x <= 31 && y >= Math.floor(RETINA_HEIGHT * 0.5);
         if (targetPixel) {
           targetColumns[x] += 1;
           targetRows[y] += 1;
           targetWeight += 1;
           targetCentroidX += x;
           targetCentroidY += y;
-        } else if (chroma > 0.27 && luminance > 0.28) {
+        } else if (!selfBodyPixel && chroma > 0.27 && luminance > 0.28) {
           const ringPixelWeight = chroma * (0.55 + luminance);
           ringWeight += ringPixelWeight;
           ringCentroidX += x * ringPixelWeight;
