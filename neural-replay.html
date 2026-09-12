@@ -152,7 +152,8 @@
             <label><input id="graph-show-shots" type="checkbox" checked /> Shots</label>
             <label><input id="graph-show-shot-average" type="checkbox" checked /> Shot avg</label>
           </div>
-          <canvas id="training-graph" width="720" height="190" role="img" aria-label="Training history graph showing rings completed and shots made per episode"></canvas>
+          <canvas id="training-graph" width="720" height="190" tabindex="0" role="img" aria-describedby="graph-probe" aria-label="Training history graph showing rings completed and shots made per episode. Hover or use arrow keys to inspect an episode."></canvas>
+          <div id="graph-probe" class="graph-probe" role="status" aria-live="polite">Hover over the graph or focus it and use the arrow keys to inspect an episode.</div>
           <div class="graph-legend" aria-label="Training graph legend">
             <span><i class="graph-rings"></i>RINGS COMPLETED / 10</span>
             <span><i class="graph-rings-average"></i>RINGS 10-EP AVG</span>

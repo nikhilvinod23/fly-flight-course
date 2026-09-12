@@ -24,7 +24,7 @@
     statRecordRings: document.getElementById("stat-record-rings"), statRecordHits: document.getElementById("stat-record-hits"),
     statPerfectShots: document.getElementById("stat-perfect-shots"), statShotsAverage: document.getElementById("stat-shots-average"),
     statRingsAverage: document.getElementById("stat-rings-average"), statLatestRings: document.getElementById("stat-latest-rings"),
-    statLatestShots: document.getElementById("stat-latest-shots"),
+    statLatestShots: document.getElementById("stat-latest-shots"), graphProbe: document.getElementById("graph-probe"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
     visualLeft: document.getElementById("visual-left"), visualRight: document.getElementById("visual-right"),
     visualUp: document.getElementById("visual-up"), visualDown: document.getElementById("visual-down"),
@@ -67,6 +67,7 @@
   const MAX_STORED_EPISODES = 500;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
+  const GRAPH_PADDING = { left: 32, right: 34, top: 16, bottom: 24 };
 
   const baseRingX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
   const baseRingY = [120, -115, 165, 35, -150, 130, -55, 175, -175, 65];
@@ -115,6 +116,7 @@
   let customGraphStart = 0;
   let customGraphEnd = 0;
   const graphVisibility = { rings: true, ringAverage: true, shots: true, shotAverage: true };
+  let graphProbeEpisode = null;
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
@@ -510,6 +512,48 @@
     if (ui.statLatestShots) ui.statLatestShots.textContent = String(latestShots);
   }
 
+  function rollingAverageAt(values, episodeNumber) {
+    const endIndex = episodeNumber - 1;
+    return average(values.slice(Math.max(0, endIndex - MOVING_AVERAGE_WINDOW + 1), endIndex + 1));
+  }
+
+  function updateGraphProbe() {
+    if (!ui.graphProbe) return;
+    if (!ringHistory.length || graphProbeEpisode === null) {
+      ui.graphProbe.textContent = "Hover over the graph or focus it and use the arrow keys to inspect an episode.";
+      return;
+    }
+    const episodeNumber = clamp(graphProbeEpisode, 1, ringHistory.length);
+    const rings = ringHistory[episodeNumber - 1] ?? 0;
+    const shots = targetHistory[episodeNumber - 1] ?? 0;
+    const ringAverage = rollingAverageAt(ringHistory, episodeNumber);
+    const shotAverage = rollingAverageAt(targetHistory, episodeNumber);
+    ui.graphProbe.textContent = `EPISODE ${episodeNumber} · RINGS ${rings}/10 · SHOTS ${shots}/2 · 10-EP AVG RINGS ${ringAverage.toFixed(1)} · SHOTS ${shotAverage.toFixed(1)}`;
+  }
+
+  function graphEpisodeAtClientX(clientX) {
+    if (!ringHistory.length) return null;
+    const rect = trainingCanvas.getBoundingClientRect();
+    const cssWidth = Math.max(280, rect.width || 720);
+    const plotWidth = cssWidth - GRAPH_PADDING.left - GRAPH_PADDING.right;
+    const graphWindow = getGraphWindow();
+    const axisSpan = Math.max(1, graphWindow.axisEnd - graphWindow.axisStart);
+    const x = clamp(clientX - rect.left, GRAPH_PADDING.left, cssWidth - GRAPH_PADDING.right);
+    const rawEpisode = graphWindow.axisStart + ((x - GRAPH_PADDING.left) / plotWidth) * axisSpan;
+    const minEpisode = Math.max(1, graphWindow.axisStart);
+    const maxEpisode = Math.min(ringHistory.length, graphWindow.axisEnd);
+    return clamp(Math.round(rawEpisode), minEpisode, Math.max(minEpisode, maxEpisode));
+  }
+
+  function setGraphProbeEpisode(episodeNumber) {
+    if (!ringHistory.length) return;
+    const graphWindow = getGraphWindow();
+    const minEpisode = Math.max(1, graphWindow.axisStart);
+    const maxEpisode = Math.min(ringHistory.length, graphWindow.axisEnd);
+    graphProbeEpisode = clamp(episodeNumber, minEpisode, Math.max(minEpisode, maxEpisode));
+    drawTrainingGraph();
+  }
+
   function drawTrainingGraph() {
     if (!trainingCanvas || !trainingCtx) return;
     const rect = trainingCanvas.getBoundingClientRect();
@@ -521,10 +565,15 @@
     trainingCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
     trainingCtx.clearRect(0, 0, cssWidth, cssHeight);
 
-    const padding = { left: 32, right: 34, top: 16, bottom: 24 };
+    const padding = GRAPH_PADDING;
     const plotWidth = cssWidth - padding.left - padding.right;
     const plotHeight = cssHeight - padding.top - padding.bottom;
     const graphWindow = getGraphWindow();
+    if (graphProbeEpisode !== null && ringHistory.length) {
+      const minProbe = Math.max(1, graphWindow.axisStart);
+      const maxProbe = Math.min(ringHistory.length, graphWindow.axisEnd);
+      graphProbeEpisode = clamp(graphProbeEpisode, minProbe, Math.max(minProbe, maxProbe));
+    }
     const axisSpan = Math.max(1, graphWindow.axisEnd - graphWindow.axisStart);
     const xForEpisode = (episodeNumber) => padding.left + ((episodeNumber - graphWindow.axisStart) / axisSpan) * plotWidth;
     const yFor = (value, max) => padding.top + plotHeight - clamp(value / max, 0, 1) * plotHeight;
@@ -605,12 +654,26 @@
     if (graphVisibility.shotAverage) drawMovingAverage(targetHistory, 2, "#ffd27b");
     if (graphVisibility.rings) drawSeries(ringHistory, 10, "#58d68d");
     if (graphVisibility.shots) drawSeries(targetHistory, 2, "#f1ad45");
+    if (graphProbeEpisode !== null && ringHistory.length) {
+      const probeEpisode = clamp(graphProbeEpisode, Math.max(1, graphWindow.axisStart), Math.min(ringHistory.length, graphWindow.axisEnd));
+      const probeX = xForEpisode(probeEpisode);
+      trainingCtx.save();
+      trainingCtx.strokeStyle = "#eaf4ff";
+      trainingCtx.lineWidth = 1;
+      trainingCtx.setLineDash([3, 3]);
+      trainingCtx.beginPath();
+      trainingCtx.moveTo(probeX, padding.top);
+      trainingCtx.lineTo(probeX, cssHeight - padding.bottom);
+      trainingCtx.stroke();
+      trainingCtx.restore();
+    }
     if (ui.graphSummary) {
       const lastRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
       const lastShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
       ui.graphSummary.textContent = ringHistory.length ? `${ringHistory.length} EPISODES · LAST ${lastRings}/10 RINGS · ${lastShots}/2 SHOTS` : "NO COMPLETED EPISODES";
     }
     updateGraphStats();
+    updateGraphProbe();
   }
 
   function applyMovementReward(rewardX, rewardY, color = null) {
@@ -1322,6 +1385,21 @@
   ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));
   ui.graphWindow.addEventListener("change", applyGraphWindow);
   ui.graphApply.addEventListener("click", applyGraphWindow);
+  trainingCanvas.addEventListener("pointermove", (event) => {
+    const episodeAtPointer = graphEpisodeAtClientX(event.clientX);
+    if (episodeAtPointer !== null) setGraphProbeEpisode(episodeAtPointer);
+  });
+  trainingCanvas.addEventListener("keydown", (event) => {
+    if (!ringHistory.length) return;
+    const graphWindow = getGraphWindow();
+    const minEpisode = Math.max(1, graphWindow.axisStart);
+    const maxEpisode = Math.min(ringHistory.length, graphWindow.axisEnd);
+    const currentEpisode = graphProbeEpisode ?? minEpisode;
+    if (event.key === "ArrowLeft") { event.preventDefault(); setGraphProbeEpisode(currentEpisode - 1); }
+    if (event.key === "ArrowRight") { event.preventDefault(); setGraphProbeEpisode(currentEpisode + 1); }
+    if (event.key === "Home") { event.preventDefault(); setGraphProbeEpisode(minEpisode); }
+    if (event.key === "End") { event.preventDefault(); setGraphProbeEpisode(maxEpisode); }
+  });
   [["rings", ui.graphShowRings], ["ringAverage", ui.graphShowRingAverage], ["shots", ui.graphShowShots], ["shotAverage", ui.graphShowShotAverage]].forEach(([key, element]) => {
     element.addEventListener("change", () => {
       graphVisibility[key] = element.checked;
