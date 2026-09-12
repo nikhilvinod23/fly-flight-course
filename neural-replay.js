@@ -69,7 +69,7 @@
   const POLICY_REPLAY_UPDATES = 5;
   const POLICY_N_STEP = 5;
   const POLICY_NOISE_START = 0.34;
-  const POLICY_NOISE_FLOOR = 0.07;
+  const POLICY_NOISE_FLOOR = 0.12;
   const POLICY_NOISE_DECAY = 150;
   const FIRE_POSITION_BINS = 5;
   const FIRE_DEPTH_BINS = 3;
@@ -377,7 +377,11 @@
         topPerformances = topPerformances.slice(0, TOP_PERFORMANCE_COUNT);
       }
       const best = topPerformances.slice(0, 3);
-      best.forEach((performance, index) => performance.rollout.forEach((transition) => updateActor(transition, transition.advantage || 0, 0.08 * (1 - index * 0.2))));
+      const bestScore = Math.max(1, best[0]?.score || 1);
+      best.forEach((performance, index) => {
+        const eliteAdvantage = 0.45 + 0.35 * clamp(performance.score / bestScore, 0, 1);
+        performance.rollout.forEach((transition) => updateActor(transition, eliteAdvantage, 0.18 * (1 - index * 0.2)));
+      });
     }
     policyLastFeatures = null;
     policyLastAction = [0, 0, 0];
@@ -921,7 +925,7 @@
       policyLastSigma = sigma;
       if (ringVisible && !oracleMode) {
         const visualAlignment = (moveX * input.ringErrorX + moveY * input.ringErrorY) * 0.5;
-        policyRewardAccumulator += clamp(visualAlignment * 0.06 * input.ringConfidence, -0.1, 0.1);
+        policyRewardAccumulator += clamp(visualAlignment * 0.28 * input.ringConfidence, -0.2, 0.2);
       }
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
@@ -965,6 +969,12 @@
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
       fireEligibility = Math.max(fireEligibility * Math.exp(-dt * 1.4), targetVisual);
       const fireThreshold = 0.14;
+      if (!oracleMode) {
+        const fireAlignmentReward = policyAction[2]
+          ? (targetVisual > fireThreshold ? clamp(targetVisual * 0.08, 0, 0.1) : -0.035)
+          : (targetVisual > fireThreshold ? -0.012 : 0);
+        policyRewardAccumulator += fireAlignmentReward;
+      }
       if (targetVisual > fireThreshold && (oracleMode || policyAction[2] === 1) && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
     } else {
       neural.frontLimb = lerp(neural.frontLimb, 0, 1 - Math.exp(-dt * 12));
