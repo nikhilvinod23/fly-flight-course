@@ -145,12 +145,28 @@
             <label>TO <input id="graph-to" type="number" min="1" placeholder="Latest" /></label>
             <button id="graph-apply" class="secondary" type="button">Apply zoom</button>
           </div>
+          <div class="training-graph-visibility" aria-label="Training graph visual toggles">
+            <span>SHOW</span>
+            <label><input id="graph-show-rings" type="checkbox" checked /> Rings</label>
+            <label><input id="graph-show-ring-average" type="checkbox" checked /> Ring avg</label>
+            <label><input id="graph-show-shots" type="checkbox" checked /> Shots</label>
+            <label><input id="graph-show-shot-average" type="checkbox" checked /> Shot avg</label>
+          </div>
           <canvas id="training-graph" width="720" height="190" role="img" aria-label="Training history graph showing rings completed and shots made per episode"></canvas>
           <div class="graph-legend" aria-label="Training graph legend">
             <span><i class="graph-rings"></i>RINGS COMPLETED / 10</span>
             <span><i class="graph-rings-average"></i>RINGS 10-EP AVG</span>
             <span><i class="graph-shots"></i>SHOTS MADE / 2</span>
             <span><i class="graph-shots-average"></i>SHOTS 10-EP AVG</span>
+          </div>
+          <div class="training-stats" aria-label="Training history statistics">
+            <div><span>RECORD RINGS</span><strong id="stat-record-rings">0</strong></div>
+            <div><span>RECORD HIT COUNT</span><strong id="stat-record-hits">0</strong></div>
+            <div><span>2-TARGET EPISODES</span><strong id="stat-perfect-shots">0</strong></div>
+            <div><span>LATEST RINGS 10-EP AVG</span><strong id="stat-rings-average">0.0</strong></div>
+            <div><span>LATEST SHOTS 10-EP AVG</span><strong id="stat-shots-average">0.0</strong></div>
+            <div><span>LATEST RING COUNT</span><strong id="stat-latest-rings">0</strong></div>
+            <div><span>LATEST SHOT COUNT</span><strong id="stat-latest-shots">0</strong></div>
           </div>
         </div>
       </section>

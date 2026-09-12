@@ -19,6 +19,12 @@
     skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), action: document.getElementById("action-label"),
     graphSummary: document.getElementById("graph-summary"), graphWindow: document.getElementById("graph-window"),
     graphFrom: document.getElementById("graph-from"), graphTo: document.getElementById("graph-to"), graphApply: document.getElementById("graph-apply"),
+    graphShowRings: document.getElementById("graph-show-rings"), graphShowRingAverage: document.getElementById("graph-show-ring-average"),
+    graphShowShots: document.getElementById("graph-show-shots"), graphShowShotAverage: document.getElementById("graph-show-shot-average"),
+    statRecordRings: document.getElementById("stat-record-rings"), statRecordHits: document.getElementById("stat-record-hits"),
+    statPerfectShots: document.getElementById("stat-perfect-shots"), statShotsAverage: document.getElementById("stat-shots-average"),
+    statRingsAverage: document.getElementById("stat-rings-average"), statLatestRings: document.getElementById("stat-latest-rings"),
+    statLatestShots: document.getElementById("stat-latest-shots"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
     visualLeft: document.getElementById("visual-left"), visualRight: document.getElementById("visual-right"),
     visualUp: document.getElementById("visual-up"), visualDown: document.getElementById("visual-down"),
@@ -45,6 +51,8 @@
   const ACTION_NOISE_FLOOR = 0.05;
   const EXPLORATION_DECAY = 180;
   const CONTEXT_BINS = 9;
+  const POLICY_BIAS_SCALE = 0.28;
+  const VISUAL_STEERING_GAIN = 0.78;
   const ELIGIBILITY_DECAY = 0.42;
   const BASELINE_MIX = 0.08;
   const PROGRESS_REWARD_SCALE = 0.65;
@@ -106,6 +114,7 @@
   let graphMode = "full";
   let customGraphStart = 0;
   let customGraphEnd = 0;
+  const graphVisibility = { rings: true, ringAverage: true, shots: true, shotAverage: true };
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
@@ -340,7 +349,7 @@
       const weakReflex = (visualDifference * 0.08 + goalError * 0.18) * action;
       const spontaneousBias = spontaneous * action * 0.23;
       const adaptationBias = -adaptation * action * 0.27;
-      const score = preferences[context][index] + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
+      const score = preferences[context][index] * POLICY_BIAS_SCALE + weakReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
@@ -357,7 +366,7 @@
     const differenceY = clamp(neural.visualUp - neural.visualDown, -1, 1);
     const previousGoalMode = neural.goalMode;
     const ringVisible = input.ringConfidence > 0.12;
-    const targetVisible = input.targetConfidence > 0.18;
+    const targetVisible = input.targetConfidence > 0.10;
     const goalMode = ringVisible ? "ring" : targetVisible ? "target" : "none";
     const goalErrorX = ringVisible ? input.ringErrorX : targetVisible ? input.targetErrorX : differenceX;
     const goalErrorY = ringVisible ? input.ringErrorY : targetVisible ? input.targetErrorY : differenceY;
@@ -408,8 +417,10 @@
       neural.progressRewardTimer = 0.12;
     }
 
-    const targetX = ACTIONS[actionXIndex] * 0.62 + differenceX * 0.08 + neural.spontaneousX * 0.3 - neural.turnBiasX * 0.2;
-    const targetY = ACTIONS[actionYIndex] * 0.62 + differenceY * 0.08 + neural.spontaneousY * 0.3 - neural.turnBiasY * 0.2;
+    const visualSteeringX = goalErrorX * goalConfidence * VISUAL_STEERING_GAIN;
+    const visualSteeringY = goalErrorY * goalConfidence * VISUAL_STEERING_GAIN;
+    const targetX = ACTIONS[actionXIndex] * 0.34 + visualSteeringX + differenceX * 0.05 + neural.spontaneousX * 0.22 - neural.turnBiasX * 0.15;
+    const targetY = ACTIONS[actionYIndex] * 0.34 + visualSteeringY + differenceY * 0.05 + neural.spontaneousY * 0.22 - neural.turnBiasY * 0.15;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -423,7 +434,8 @@
     const target = targets[nextTargetIndex];
     if (target && !target.hit && !target.missed) {
       const targetDepth = target.z - player.z;
-      const targetVisual = input.targetCenter * input.center;
+      const targetAlignment = input.targetConfidence * (1 - clamp((Math.abs(input.targetErrorX) + Math.abs(input.targetErrorY)) * 0.5, 0, 1));
+      const targetVisual = Math.max(input.targetCenter * input.center, targetAlignment * 1.5);
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
       fireEligibility = Math.max(fireEligibility * Math.exp(-dt * 1.4), targetVisual);
       const fireThreshold = clamp(0.2 - firePreference * 0.04, 0.08, 0.26);
@@ -475,6 +487,27 @@
       customGraphEnd = Math.max(customGraphStart + 1, Number.parseInt(ui.graphTo.value, 10) || ringHistory.length || 1);
     }
     drawTrainingGraph();
+  }
+
+  function average(values) {
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  }
+
+  function updateGraphStats() {
+    const latestRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
+    const latestShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
+    const recentRings = ringHistory.slice(-MOVING_AVERAGE_WINDOW);
+    const recentShots = targetHistory.slice(-MOVING_AVERAGE_WINDOW);
+    const recordRings = ringHistory.length ? Math.max(...ringHistory) : 0;
+    const recordHits = recordRings > 0 ? ringHistory.filter((value) => value === recordRings).length : 0;
+    const perfectShotEpisodes = targetHistory.filter((value) => value >= 2).length;
+    if (ui.statRecordRings) ui.statRecordRings.textContent = String(recordRings);
+    if (ui.statRecordHits) ui.statRecordHits.textContent = String(recordHits);
+    if (ui.statPerfectShots) ui.statPerfectShots.textContent = String(perfectShotEpisodes);
+    if (ui.statRingsAverage) ui.statRingsAverage.textContent = average(recentRings).toFixed(1);
+    if (ui.statShotsAverage) ui.statShotsAverage.textContent = average(recentShots).toFixed(1);
+    if (ui.statLatestRings) ui.statLatestRings.textContent = String(latestRings);
+    if (ui.statLatestShots) ui.statLatestShots.textContent = String(latestShots);
   }
 
   function drawTrainingGraph() {
@@ -568,15 +601,16 @@
       trainingCtx.stroke();
       trainingCtx.setLineDash([]);
     };
-    drawMovingAverage(ringHistory, 10, "#b4f3ca");
-    drawMovingAverage(targetHistory, 2, "#ffd27b");
-    drawSeries(ringHistory, 10, "#58d68d");
-    drawSeries(targetHistory, 2, "#f1ad45");
+    if (graphVisibility.ringAverage) drawMovingAverage(ringHistory, 10, "#b4f3ca");
+    if (graphVisibility.shotAverage) drawMovingAverage(targetHistory, 2, "#ffd27b");
+    if (graphVisibility.rings) drawSeries(ringHistory, 10, "#58d68d");
+    if (graphVisibility.shots) drawSeries(targetHistory, 2, "#f1ad45");
     if (ui.graphSummary) {
       const lastRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
       const lastShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
       ui.graphSummary.textContent = ringHistory.length ? `${ringHistory.length} EPISODES · LAST ${lastRings}/10 RINGS · ${lastShots}/2 SHOTS` : "NO COMPLETED EPISODES";
     }
+    updateGraphStats();
   }
 
   function applyMovementReward(rewardX, rewardY, color = null) {
@@ -1288,6 +1322,12 @@
   ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));
   ui.graphWindow.addEventListener("change", applyGraphWindow);
   ui.graphApply.addEventListener("click", applyGraphWindow);
+  [["rings", ui.graphShowRings], ["ringAverage", ui.graphShowRingAverage], ["shots", ui.graphShowShots], ["shotAverage", ui.graphShowShotAverage]].forEach(([key, element]) => {
+    element.addEventListener("change", () => {
+      graphVisibility[key] = element.checked;
+      drawTrainingGraph();
+    });
+  });
 
   resizeGame();
   resetEpisode();
