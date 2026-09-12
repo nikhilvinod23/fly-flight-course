@@ -22,8 +22,10 @@
     graphShowRings: document.getElementById("graph-show-rings"), graphShowRingAverage: document.getElementById("graph-show-ring-average"),
     graphShowShots: document.getElementById("graph-show-shots"), graphShowShotAverage: document.getElementById("graph-show-shot-average"),
     courseMode: document.getElementById("course-mode"), courseModeNote: document.getElementById("course-mode-note"),
+    evaluate: document.getElementById("evaluate-button"),
     statRecordRings: document.getElementById("stat-record-rings"), statRecordHits: document.getElementById("stat-record-hits"),
     statPerfectShots: document.getElementById("stat-perfect-shots"), statShotsAverage: document.getElementById("stat-shots-average"),
+    statFirstRingsAverage: document.getElementById("stat-first-rings-average"), statFirstShotsAverage: document.getElementById("stat-first-shots-average"),
     statRingsAverage: document.getElementById("stat-rings-average"), statLatestRings: document.getElementById("stat-latest-rings"),
     statLatestShots: document.getElementById("stat-latest-shots"), graphProbe: document.getElementById("graph-probe"),
     reward: document.getElementById("reward-label"), learning: document.getElementById("learning-label"),
@@ -46,12 +48,15 @@
   const Q_POSITION_BINS = 5;
   const Q_SIZE_BINS = 3;
   const Q_VELOCITY_BINS = 3;
-  const Q_STATE_COUNT = Q_POSITION_BINS * Q_POSITION_BINS * Q_SIZE_BINS * Q_VELOCITY_BINS * Q_VELOCITY_BINS;
+  const Q_PHASE_BINS = 10;
+  const Q_STATE_COUNT = Q_PHASE_BINS * Q_POSITION_BINS * Q_POSITION_BINS * Q_SIZE_BINS * Q_VELOCITY_BINS * Q_VELOCITY_BINS;
   const Q_ALPHA = 0.2;
   const Q_GAMMA = 0.92;
   const Q_EPSILON_START = 0.34;
   const Q_EPSILON_FLOOR = 0.06;
   const Q_EPSILON_DECAY = 260;
+  const Q_REPLAY_CAPACITY = 6000;
+  const Q_REPLAY_UPDATES_PER_STEP = 4;
   const COURSE_LENGTH = 7300;
   const SPEED = 360;
   const LATERAL_SPEED = 270;
@@ -149,6 +154,8 @@
   let qActionIndex = 4;
   let qRewardAccumulator = 0;
   let qUpdates = 0;
+  let qReplayBuffer = [];
+  let evaluationMode = false;
   let firePreference = 0;
   let fireBaseline = 0;
   let fireEligibility = 0;
@@ -190,7 +197,7 @@
   function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
-  function qEpsilon() { return Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
+  function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
   function signedBin(value, bins) {
     return clamp(Math.floor((clamp(value, -1, 1) + 1) * 0.5 * bins), 0, bins - 1);
   }
@@ -206,7 +213,8 @@
     const size = sizeBin(input.ringSize * input.ringConfidence);
     const velocityX = velocityBin(neural.moveX);
     const velocityY = velocityBin(neural.moveY);
-    return ((((x * Q_POSITION_BINS) + y) * Q_SIZE_BINS + size) * Q_VELOCITY_BINS + velocityX) * Q_VELOCITY_BINS + velocityY;
+    const phase = clamp(nextRingIndex, 0, Q_PHASE_BINS - 1);
+    return (((((phase * Q_POSITION_BINS) + x) * Q_POSITION_BINS + y) * Q_SIZE_BINS + size) * Q_VELOCITY_BINS + velocityX) * Q_VELOCITY_BINS + velocityY;
   }
   function bestQValue(state) { return Math.max(...qValues[state]); }
   function chooseQAction(state) {
@@ -216,12 +224,37 @@
     const candidates = values.map((value, index) => value === best ? index : -1).filter((index) => index >= 0);
     return candidates[Math.floor(randomUnit() * candidates.length)] ?? 4;
   }
+  function applyQTransition(state, action, reward, nextState, terminal = false) {
+    const current = qValues[state][action];
+    const target = reward + (terminal ? 0 : Q_GAMMA * bestQValue(nextState));
+    qValues[state][action] = current + Q_ALPHA * (target - current);
+    qUpdates += 1;
+  }
+  function rememberQTransition(transition) {
+    qReplayBuffer.push(transition);
+    if (qReplayBuffer.length > Q_REPLAY_CAPACITY) qReplayBuffer.shift();
+  }
+  function replayQTransitions() {
+    if (evaluationMode || qReplayBuffer.length < 8) return;
+    for (let index = 0; index < Q_REPLAY_UPDATES_PER_STEP; index += 1) {
+      const transition = qReplayBuffer[Math.floor(randomUnit() * qReplayBuffer.length)];
+      applyQTransition(transition.state, transition.action, transition.reward, transition.nextState, transition.terminal);
+    }
+  }
   function updateQValue(nextState, terminal = false) {
     if (qState === null) return;
-    const current = qValues[qState][qActionIndex];
-    const target = qRewardAccumulator + (terminal ? 0 : Q_GAMMA * bestQValue(nextState));
-    qValues[qState][qActionIndex] = current + Q_ALPHA * (target - current);
-    qUpdates += 1;
+    if (!evaluationMode) {
+      const transition = {
+        state: qState,
+        action: qActionIndex,
+        reward: clamp(qRewardAccumulator, -2, 2),
+        nextState,
+        terminal
+      };
+      applyQTransition(transition.state, transition.action, transition.reward, transition.nextState, terminal);
+      rememberQTransition(transition);
+      replayQTransitions();
+    }
     qRewardAccumulator = 0;
   }
   function finalizeQEpisode() {
@@ -319,6 +352,8 @@
     qActionIndex = 4;
     qRewardAccumulator = 0;
     qUpdates = 0;
+    qReplayBuffer = [];
+    evaluationMode = false;
     visualPolicyX = freshPreferences();
     visualPolicyY = freshPreferences();
     eligibilityX = freshEligibility();
@@ -779,6 +814,8 @@
   function updateGraphStats() {
     const latestRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
     const latestShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
+    const firstRings = ringHistory.slice(0, MOVING_AVERAGE_WINDOW);
+    const firstShots = targetHistory.slice(0, MOVING_AVERAGE_WINDOW);
     const recentRings = ringHistory.slice(-MOVING_AVERAGE_WINDOW);
     const recentShots = targetHistory.slice(-MOVING_AVERAGE_WINDOW);
     const recordRings = ringHistory.length ? Math.max(...ringHistory) : 0;
@@ -787,6 +824,8 @@
     if (ui.statRecordRings) ui.statRecordRings.textContent = String(recordRings);
     if (ui.statRecordHits) ui.statRecordHits.textContent = String(recordHits);
     if (ui.statPerfectShots) ui.statPerfectShots.textContent = String(perfectShotEpisodes);
+    if (ui.statFirstRingsAverage) ui.statFirstRingsAverage.textContent = average(firstRings).toFixed(1);
+    if (ui.statFirstShotsAverage) ui.statFirstShotsAverage.textContent = average(firstShots).toFixed(1);
     if (ui.statRingsAverage) ui.statRingsAverage.textContent = average(recentRings).toFixed(1);
     if (ui.statShotsAverage) ui.statShotsAverage.textContent = average(recentShots).toFixed(1);
     if (ui.statLatestRings) ui.statLatestRings.textContent = String(latestRings);
@@ -1061,13 +1100,16 @@
   }
 
   function finishEpisode() {
+    const wasEvaluation = evaluationMode;
     running = false;
     finalizeQEpisode();
-    recordEpisodeStats();
+    evaluationMode = false;
+    if (!wasEvaluation) recordEpisodeStats();
     syncUI();
     ui.card.hidden = false;
     ui.status.textContent = "COMPLETE";
-    ui.message.textContent = "EPISODE COMPLETE";
+    ui.message.textContent = wasEvaluation ? `GREEDY EVALUATION · ${episodeRingHits}/10 RINGS · ${targets.filter((target) => target.hit).length}/2 SHOTS` : "EPISODE COMPLETE";
+    if (wasEvaluation) ui.learning.textContent = `Greedy evaluation · ${episodeRingHits}/${rings.length} rings · ${targets.filter((target) => target.hit).length}/${targets.length} shots · no learning update.`;
     ui.start.textContent = "Run next episode";
   }
 
@@ -1085,7 +1127,7 @@
   function fastForwardEpisodes(count) {
     if (running || fastForwarding) return;
     fastForwarding = true;
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = true; });
+    [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = true; });
     ui.card.hidden = false;
     ui.status.textContent = "SIMULATING";
     ui.message.textContent = `FAST-FORWARD ×${count}`;
@@ -1119,7 +1161,7 @@
       running = false;
       fastForwarding = false;
       fastForwardState = null;
-      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
+      [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
       console.error(error);
       syncUI();
       ui.status.textContent = "ERROR";
@@ -1146,7 +1188,7 @@
     ui.status.textContent = "READY";
     ui.message.textContent = `READY AFTER ${state.count} SIMULATIONS`;
     ui.start.textContent = "Run next episode";
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
+    [ui.start, ui.run, ui.resetLearning, ui.evaluate, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100, ui.courseMode].forEach((button) => { button.disabled = false; });
     fastForwarding = false;
     fastForwardState = null;
     syncUI();
@@ -1331,6 +1373,7 @@
     ui.message.textContent = running ? (rewardFlash > 0 ? "POSITIVE REWARD" : "RETINA → MOTOR") : "REPLAY READY";
     ui.action.textContent = `X ${neural.moveX.toFixed(2)} · Y ${neural.moveY.toFixed(2)}`;
     ui.reward.textContent = `REWARD ${lastReward.toFixed(2)}`;
+    ui.evaluate.disabled = running || fastForwarding;
     setBar(ui.visualLeft, neural.visualLeft); setBar(ui.visualRight, neural.visualRight);
     setBar(ui.visualUp, neural.visualUp); setBar(ui.visualDown, neural.visualDown);
     setBar(ui.motorLeft, neural.motorLeft); setBar(ui.motorRight, neural.motorRight);
@@ -1647,8 +1690,9 @@
     }
   }
 
-  function startEpisode() {
+  function startEpisode(evaluate = false) {
     if (running || fastForwarding) return;
+    evaluationMode = evaluate;
     episode += 1;
     resetEpisode();
     running = true;
@@ -1673,6 +1717,7 @@
   ui.start.addEventListener("click", startEpisode);
   ui.run.addEventListener("click", startEpisode);
   ui.resetLearning.addEventListener("click", resetLearning);
+  ui.evaluate.addEventListener("click", () => startEpisode(true));
   ui.courseMode.addEventListener("change", () => {
     if (running || fastForwarding) {
       syncCourseModeUI();

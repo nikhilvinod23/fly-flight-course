@@ -119,7 +119,7 @@ button.secondary { border-color: #51677e; color: #c8d6e5; }
 .training-graph-visibility { display: flex; align-items: center; flex-wrap: wrap; gap: 0.7rem; margin-top: 0.55rem; color: var(--muted); font-size: 0.61rem; font-weight: 800; letter-spacing: 0.06em; }
 .training-graph-visibility label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; letter-spacing: 0.02em; }
 .training-graph-visibility input { accent-color: var(--blue); }
-.training-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.45rem; margin-top: 0.65rem; }
+.training-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.45rem; margin-top: 0.65rem; }
 .training-stats div { display: flex; align-items: baseline; justify-content: space-between; gap: 0.35rem; padding: 0.38rem 0.45rem; border: 1px solid #1c3c56; background: #071321; }
 .training-stats span { color: var(--muted); font-size: 0.55rem; font-weight: 800; letter-spacing: 0.045em; }
 .training-stats strong { color: var(--ink); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
