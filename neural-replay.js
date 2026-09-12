@@ -52,7 +52,7 @@
   const EXPLORATION_DECAY = 180;
   const CONTEXT_BINS = 9;
   const POLICY_BIAS_SCALE = 0.5;
-  const VISUAL_POLICY_RATE = 0.18;
+  const VISUAL_POLICY_RATE = 0.1;
   const VISUAL_POLICY_TRACE_SCALE = 0.9;
   const VISUAL_POLICY_LIMIT = 2.5;
   const MAX_LEARNED_VISUAL_GAIN = 0.78;
@@ -60,8 +60,8 @@
   const VISUAL_GAIN_MISS_STEP = 0.006;
   const EPISODE_BASELINE_MIX = 0.06;
   const EPISODE_TRACE_SCALE = 0.4;
-  const RING_TRACE_SCALE = 0.9;
-  const RING_TRACE_DECAY = 0.9;
+  const RING_TRACE_SCALE = 0.65;
+  const RING_TRACE_DECAY = 1.35;
   const RECORD_TRACE_BONUS = 0.5;
   const RECORD_STEERING_GAIN_BONUS = 0.08;
   const TOP_PERFORMANCE_COUNT = 10;
@@ -580,8 +580,8 @@
 
   function learnFromRingOutcome(success, xQuality, yQuality) {
     const quality = (xQuality + yQuality) * 0.5;
-    const ringAdvantage = success ? 1.15 + quality * 0.85 : -0.85 + quality * 0.25;
-    const visualAdvantage = success ? 1.2 + quality * 0.8 : -0.9;
+    const ringAdvantage = success ? 1.15 + quality * 0.85 : -0.22 + quality * 0.08;
+    const visualAdvantage = success ? 1.2 + quality * 0.8 : -0.16;
     reinforceTrace(preferencesX, ringTraceX, ringAdvantage * RING_TRACE_SCALE);
     reinforceTrace(preferencesY, ringTraceY, ringAdvantage * RING_TRACE_SCALE);
     reinforceVisualTrace(visualPolicyX, ringTraceX, visualAdvantage * VISUAL_POLICY_TRACE_SCALE);
@@ -605,8 +605,9 @@
     const advantage = clamp(score - episodeScoreBaseline, -4, 4);
     reinforceTrace(preferencesX, episodeTraceX, advantage * EPISODE_TRACE_SCALE);
     reinforceTrace(preferencesY, episodeTraceY, advantage * EPISODE_TRACE_SCALE);
-    reinforceVisualTrace(visualPolicyX, episodeVisualTraceX, advantage * EPISODE_TRACE_SCALE);
-    reinforceVisualTrace(visualPolicyY, episodeVisualTraceY, advantage * EPISODE_TRACE_SCALE);
+    const visualAdvantage = Math.max(0, advantage);
+    reinforceVisualTrace(visualPolicyX, episodeVisualTraceX, visualAdvantage * EPISODE_TRACE_SCALE);
+    reinforceVisualTrace(visualPolicyY, episodeVisualTraceY, visualAdvantage * EPISODE_TRACE_SCALE);
     episodeScoreBaseline = lerp(episodeScoreBaseline, score, EPISODE_BASELINE_MIX);
 
     const bestBefore = topPerformances.length ? topPerformances[0].score : -Infinity;
@@ -859,8 +860,10 @@
     reinforcePreference(preferencesX, deltaX, eligibilityX);
     reinforcePreference(preferencesY, deltaY, eligibilityY);
     if (neural.goalMode === "ring") {
-      reinforceVisualTrace(visualPolicyX, eligibilityX, clamp(deltaX * 0.7, -0.35, 0.35));
-      reinforceVisualTrace(visualPolicyY, eligibilityY, clamp(deltaY * 0.7, -0.35, 0.35));
+      const visualDeltaX = deltaX >= 0 ? deltaX * 0.55 : deltaX * 0.15;
+      const visualDeltaY = deltaY >= 0 ? deltaY * 0.55 : deltaY * 0.15;
+      reinforceVisualTrace(visualPolicyX, eligibilityX, clamp(visualDeltaX, -0.12, 0.28));
+      reinforceVisualTrace(visualPolicyY, eligibilityY, clamp(visualDeltaY, -0.12, 0.28));
     }
     const reward = (rewardX + rewardY) * 0.5;
     lastReward = reward;
