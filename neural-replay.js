@@ -16,7 +16,7 @@
     message: document.getElementById("message-label"), card: document.getElementById("start-card"),
     start: document.getElementById("start-button"), run: document.getElementById("run-button"),
     resetLearning: document.getElementById("reset-learning"), skip5: document.getElementById("skip-5"),
-    skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), action: document.getElementById("action-label"),
+    skip10: document.getElementById("skip-10"), skip25: document.getElementById("skip-25"), skip50: document.getElementById("skip-50"), skip100: document.getElementById("skip-100"), action: document.getElementById("action-label"),
     graphSummary: document.getElementById("graph-summary"), graphWindow: document.getElementById("graph-window"),
     graphFrom: document.getElementById("graph-from"), graphTo: document.getElementById("graph-to"), graphApply: document.getElementById("graph-apply"),
     graphShowRings: document.getElementById("graph-show-rings"), graphShowRingAverage: document.getElementById("graph-show-ring-average"),
@@ -862,7 +862,7 @@
   function fastForwardEpisodes(count) {
     if (running || fastForwarding) return;
     fastForwarding = true;
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = true; });
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = true; });
     ui.card.hidden = false;
     ui.status.textContent = "SIMULATING";
     ui.message.textContent = `FAST-FORWARD ×${count}`;
@@ -896,7 +896,7 @@
       running = false;
       fastForwarding = false;
       fastForwardState = null;
-      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = false; });
+      [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = false; });
       console.error(error);
       syncUI();
       ui.status.textContent = "ERROR";
@@ -923,7 +923,7 @@
     ui.status.textContent = "READY";
     ui.message.textContent = `READY AFTER ${state.count} SIMULATIONS`;
     ui.start.textContent = "Run next episode";
-    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25].forEach((button) => { button.disabled = false; });
+    [ui.start, ui.run, ui.resetLearning, ui.skip5, ui.skip10, ui.skip25, ui.skip50, ui.skip100].forEach((button) => { button.disabled = false; });
     fastForwarding = false;
     fastForwardState = null;
     syncUI();
@@ -1452,6 +1452,8 @@
   ui.skip5.addEventListener("click", () => fastForwardEpisodes(5));
   ui.skip10.addEventListener("click", () => fastForwardEpisodes(10));
   ui.skip25.addEventListener("click", () => fastForwardEpisodes(25));
+  ui.skip50.addEventListener("click", () => fastForwardEpisodes(50));
+  ui.skip100.addEventListener("click", () => fastForwardEpisodes(100));
   ui.graphWindow.addEventListener("change", applyGraphWindow);
   ui.graphApply.addEventListener("click", applyGraphWindow);
   trainingCanvas.addEventListener("pointermove", (event) => {
