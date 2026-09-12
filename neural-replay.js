@@ -58,6 +58,19 @@
   const Q_EPSILON_DECAY = 120;
   const Q_REPLAY_CAPACITY = 6000;
   const Q_REPLAY_UPDATES_PER_STEP = 4;
+  const POLICY_BASE_FEATURES = 20;
+  const POLICY_MEMORY_SIZE = 8;
+  const POLICY_FEATURE_SIZE = POLICY_BASE_FEATURES + POLICY_MEMORY_SIZE;
+  const POLICY_OUTPUTS = 3;
+  const POLICY_GAMMA = 0.96;
+  const POLICY_ACTOR_RATE = 0.0045;
+  const POLICY_CRITIC_RATE = 0.055;
+  const POLICY_REPLAY_CAPACITY = 12000;
+  const POLICY_REPLAY_UPDATES = 5;
+  const POLICY_N_STEP = 5;
+  const POLICY_NOISE_START = 0.34;
+  const POLICY_NOISE_FLOOR = 0.07;
+  const POLICY_NOISE_DECAY = 150;
   const FIRE_POSITION_BINS = 5;
   const FIRE_DEPTH_BINS = 3;
   const FIRE_STATE_COUNT = FIRE_POSITION_BINS * FIRE_POSITION_BINS * FIRE_DEPTH_BINS;
@@ -161,6 +174,23 @@
   let qRewardAccumulator = 0;
   let qUpdates = 0;
   let qReplayBuffer = [];
+  let actorWeights = freshActorWeights();
+  let actorBias = [0, 0, -1.2];
+  let criticWeights = new Array(POLICY_FEATURE_SIZE).fill(0);
+  let criticBias = 0;
+  let targetCriticWeights = criticWeights.slice();
+  let targetCriticBias = 0;
+  let policyMemory = new Array(POLICY_MEMORY_SIZE).fill(0);
+  let policyLastFeatures = null;
+  let policyLastMeans = [0, 0, 0];
+  let policyLastAction = [0, 0, 0];
+  let policyLastSigma = POLICY_NOISE_START;
+  let policyAction = [0, 0, 0];
+  let policyRewardAccumulator = 0;
+  let policyRollout = [];
+  let policyReplayBuffer = [];
+  let policyUpdates = 0;
+  let policyEpisodeReturn = 0;
   let evaluationMode = false;
   let oracleMode = false;
   let fireQValues = freshFireQValues();
@@ -196,7 +226,7 @@
     contextX: 2, contextY: 2, fireCooldown: 0, decisionTimer: 0, noiseTimer: 0,
     spontaneousX: 0, spontaneousY: 0, turnBiasX: 0, turnBiasY: 0,
     goalMode: "none", goalErrorX: 0, goalErrorY: 0, goalConfidence: 0,
-    rewardReferenceX: 0, rewardReferenceY: 0, progressRewardTimer: 0
+    rewardReferenceX: 0, rewardReferenceY: 0, progressRewardTimer: 0, rewardPotential: 0
   };
 
   const three = {
@@ -212,6 +242,7 @@
   function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
+  function freshActorWeights() { return Array.from({ length: POLICY_OUTPUTS }, () => new Array(POLICY_FEATURE_SIZE).fill(0)); }
   function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0.035]); }
   function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
   function signedBin(value, bins) {
@@ -233,6 +264,127 @@
     return values[1] > values[0] ? 1 : 0;
   }
   function inputFireTieBreak() { return 1; }
+
+  function policyNoise() {
+    return evaluationMode ? 0 : Math.max(POLICY_NOISE_FLOOR, POLICY_NOISE_START * Math.exp(-episode / POLICY_NOISE_DECAY));
+  }
+  function policySigmoid(value) { return 1 / (1 + Math.exp(-clamp(value, -12, 12))); }
+  function policyDot(weights, features) {
+    return weights.reduce((sum, weight, index) => sum + weight * features[index], 0);
+  }
+  function policyBaseFeatures(input) {
+    const phase = rings.length ? nextRingIndex / rings.length : 0;
+    return [
+      input.ringErrorX, input.ringErrorY, input.ringConfidence, input.ringSize,
+      input.targetErrorX, input.targetErrorY, input.targetConfidence, input.targetCenter,
+      clamp(input.right - input.left, -1, 1), clamp(input.up - input.down, -1, 1),
+      neural.moveX, neural.moveY, phase, Math.sin(phase * Math.PI * 2), Math.cos(phase * Math.PI * 2),
+      neural.goalErrorX, neural.goalErrorY, neural.goalConfidence, clamp(neural.fireCooldown, 0, 1),
+      clamp(lastReward / 2, -1, 1)
+    ];
+  }
+  function buildPolicyFeatures(input) {
+    const base = policyBaseFeatures(input);
+    for (let index = 0; index < POLICY_MEMORY_SIZE; index += 1) {
+      const source = base[(index * 3) % POLICY_BASE_FEATURES] + policyLastAction[index % POLICY_OUTPUTS] * 0.35;
+      policyMemory[index] = Math.tanh(policyMemory[index] * 0.86 + source * 0.14);
+    }
+    return base.concat(policyMemory);
+  }
+  function criticValue(features, useTarget = false) {
+    return policyDot(useTarget ? targetCriticWeights : criticWeights, features) + (useTarget ? targetCriticBias : criticBias);
+  }
+  function policyMeans(features) {
+    return [
+      Math.tanh(policyDot(actorWeights[0], features) + actorBias[0]),
+      Math.tanh(policyDot(actorWeights[1], features) + actorBias[1]),
+      policySigmoid(policyDot(actorWeights[2], features) + actorBias[2])
+    ];
+  }
+  function policyNormalSample(sigma) { return sensoryNoise(sigma); }
+  function updateCritic(features, target, rate = POLICY_CRITIC_RATE) {
+    const error = clamp(target - criticValue(features), -3, 3);
+    criticWeights = criticWeights.map((weight, index) => clamp(weight + rate * error * features[index], -4, 4));
+    criticBias = clamp(criticBias + rate * error, -4, 4);
+    policyUpdates += 1;
+    return error;
+  }
+  function updateActor(transition, advantage, scale = 1) {
+    const sigma = Math.max(transition.sigma, POLICY_NOISE_FLOOR);
+    const moveGradientX = clamp(((transition.action[0] - transition.means[0]) / (sigma * sigma)) * (1 - transition.means[0] * transition.means[0]) * advantage * scale, -2, 2);
+    const moveGradientY = clamp(((transition.action[1] - transition.means[1]) / (sigma * sigma)) * (1 - transition.means[1] * transition.means[1]) * advantage * scale, -2, 2);
+    const fireGradient = clamp((transition.action[2] - transition.means[2]) * advantage * scale, -2, 2);
+    [moveGradientX, moveGradientY, fireGradient].forEach((gradient, output) => {
+      actorWeights[output] = actorWeights[output].map((weight, index) => clamp(weight + POLICY_ACTOR_RATE * gradient * transition.features[index], -5, 5));
+      actorBias[output] = clamp(actorBias[output] + POLICY_ACTOR_RATE * gradient, -5, 5);
+    });
+  }
+  function pushPolicyTransition(transition) {
+    const priority = Math.abs(transition.advantage || transition.reward) + 0.05;
+    policyReplayBuffer.push({ ...transition, priority });
+    if (policyReplayBuffer.length > POLICY_REPLAY_CAPACITY) policyReplayBuffer.shift();
+  }
+  function replayPolicyCritic() {
+    if (evaluationMode || policyReplayBuffer.length < 8) return;
+    for (let index = 0; index < POLICY_REPLAY_UPDATES; index += 1) {
+      const totalPriority = policyReplayBuffer.reduce((sum, item) => sum + item.priority, 0);
+      let cursor = randomUnit() * totalPriority;
+      let selected = policyReplayBuffer[0];
+      for (const item of policyReplayBuffer) {
+        cursor -= item.priority;
+        if (cursor <= 0) { selected = item; break; }
+      }
+      const error = updateCritic(selected.features, selected.returnTarget, POLICY_CRITIC_RATE * 0.45);
+      selected.priority = Math.abs(error) + 0.05;
+    }
+    targetCriticWeights = criticWeights.slice();
+    targetCriticBias = criticBias;
+  }
+  function finishPolicyEpisode() {
+    if (policyLastFeatures) {
+      policyRollout.push({ features: policyLastFeatures.slice(), means: policyLastMeans.slice(), action: policyLastAction.slice(), sigma: policyLastSigma, reward: clamp(policyRewardAccumulator, -2, 2) });
+    }
+    policyEpisodeReturn = policyRollout.reduce((sum, transition) => sum + transition.reward, 0);
+    let returnValue = 0;
+    for (let index = policyRollout.length - 1; index >= 0; index -= 1) {
+      const transition = policyRollout[index];
+      returnValue = transition.reward + POLICY_GAMMA * returnValue;
+      let nStepTarget = 0;
+      let discount = 1;
+      for (let step = 0; step < POLICY_N_STEP && index + step < policyRollout.length; step += 1) {
+        nStepTarget += discount * policyRollout[index + step].reward;
+        discount *= POLICY_GAMMA;
+      }
+      if (index + POLICY_N_STEP < policyRollout.length) {
+        nStepTarget += discount * criticValue(policyRollout[index + POLICY_N_STEP].features, true);
+      }
+      const advantage = clamp(returnValue - criticValue(transition.features), -3, 3);
+      transition.returnTarget = nStepTarget;
+      transition.policyReturn = returnValue;
+      transition.advantage = advantage;
+      if (!evaluationMode) {
+        updateCritic(transition.features, nStepTarget);
+        updateActor(transition, advantage);
+        pushPolicyTransition(transition);
+      }
+    }
+    if (!evaluationMode) {
+      replayPolicyCritic();
+      const score = episodeRingHits + targets.filter((target) => target.hit).length * 1.5;
+      if (score > 0) {
+        topPerformances.push({ score, rings: episodeRingHits, shots: targets.filter((target) => target.hit).length, rollout: policyRollout.map((transition) => ({ ...transition, features: transition.features.slice(), means: transition.means.slice(), action: transition.action.slice() })) });
+        topPerformances.sort((a, b) => b.score - a.score);
+        topPerformances = topPerformances.slice(0, TOP_PERFORMANCE_COUNT);
+      }
+      const best = topPerformances.slice(0, 3);
+      best.forEach((performance, index) => performance.rollout.forEach((transition) => updateActor(transition, transition.advantage || 0, 0.08 * (1 - index * 0.2))));
+    }
+    policyLastFeatures = null;
+    policyLastAction = [0, 0, 0];
+    policyRewardAccumulator = 0;
+    policyRollout = [];
+    policyEpisodeReturn = 0;
+  }
   function updateFireValue(nextState, terminal = false) {
     if (fireState === null || evaluationMode) return;
     const current = fireQValues[fireState][fireAction];
@@ -305,6 +457,13 @@
     qState = null;
     qActionIndex = 4;
     qRewardAccumulator = 0;
+    policyMemory = new Array(POLICY_MEMORY_SIZE).fill(0);
+    policyLastFeatures = null;
+    policyLastMeans = [0, 0, 0];
+    policyLastAction = [0, 0, 0];
+    policyAction = [0, 0, 0];
+    policyRewardAccumulator = 0;
+    policyRollout = [];
     fireState = null;
     fireAction = 0;
     fireRewardAccumulator = 0;
@@ -362,10 +521,19 @@
     neural.rewardReferenceX = 0;
     neural.rewardReferenceY = 0;
     neural.progressRewardTimer = 0;
+    neural.rewardPotential = 0;
     neural.frontLimb = 0;
     qState = null;
     qActionIndex = 4;
     qRewardAccumulator = 0;
+    policyMemory = new Array(POLICY_MEMORY_SIZE).fill(0);
+    policyLastFeatures = null;
+    policyLastMeans = [0, 0, 0];
+    policyLastAction = [0, 0, 0];
+    policyLastSigma = POLICY_NOISE_START;
+    policyAction = [0, 0, 0];
+    policyRewardAccumulator = 0;
+    policyRollout = [];
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     fireEligibility = 0;
@@ -398,6 +566,15 @@
     preferencesX = freshPreferences();
     preferencesY = freshPreferences();
     qValues = freshQValues();
+    actorWeights = freshActorWeights();
+    actorBias = [0, 0, -1.2];
+    criticWeights = new Array(POLICY_FEATURE_SIZE).fill(0);
+    criticBias = 0;
+    targetCriticWeights = criticWeights.slice();
+    targetCriticBias = 0;
+    policyReplayBuffer = [];
+    policyUpdates = 0;
+    policyEpisodeReturn = 0;
     fireQValues = freshFireQValues();
     qState = null;
     qActionIndex = 4;
@@ -715,70 +892,50 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
-      const nextQState = encodeQState(input);
-      updateQValue(nextQState);
-      qActionIndex = chooseQAction(nextQState);
-      qState = nextQState;
-      const [jointX, jointY] = JOINT_ACTIONS[qActionIndex];
-      actionXIndex = jointX < 0 ? 0 : jointX > 0 ? 4 : 2;
-      actionYIndex = jointY < 0 ? 0 : jointY > 0 ? 4 : 2;
-      if (!oracleMode && learnedVisualGain > 0.02) {
-        selectAxisAction("x");
-        selectAxisAction("y");
+      if (policyLastFeatures) {
+        policyRollout.push({ features: policyLastFeatures.slice(), means: policyLastMeans.slice(), action: policyLastAction.slice(), sigma: policyLastSigma, reward: clamp(policyRewardAccumulator, -2, 2) });
+        policyEpisodeReturn += policyRewardAccumulator;
+        policyRewardAccumulator = 0;
       }
+      const features = buildPolicyFeatures(input);
+      const means = policyMeans(features);
+      const sigma = policyNoise();
+      const moveX = evaluationMode ? means[0] : clamp(means[0] + policyNormalSample(sigma), -1, 1);
+      const moveY = evaluationMode ? means[1] : clamp(means[1] + policyNormalSample(sigma), -1, 1);
+      const fire = evaluationMode ? (means[2] > 0.5 ? 1 : 0) : (randomUnit() < means[2] ? 1 : 0);
+      policyAction = [moveX, moveY, fire];
+      policyLastFeatures = features;
+      policyLastMeans = means;
+      policyLastAction = policyAction.slice();
+      policyLastSigma = sigma;
       if (ringVisible && !oracleMode) {
-        const visualAlignment = (jointX * input.ringErrorX + jointY * input.ringErrorY) * 0.5;
-        qRewardAccumulator += clamp(visualAlignment * 0.05 * input.ringConfidence, -0.08, 0.08);
+        const visualAlignment = (moveX * input.ringErrorX + moveY * input.ringErrorY) * 0.5;
+        policyRewardAccumulator += clamp(visualAlignment * 0.06 * input.ringConfidence, -0.1, 0.1);
       }
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
-    }
-    const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
-    eligibilityX = eligibilityX.map((row) => row.map((value) => value * eligibilityMix));
-    eligibilityY = eligibilityY.map((row) => row.map((value) => value * eligibilityMix));
-    eligibilityX[neural.contextX][actionXIndex] = Math.max(eligibilityX[neural.contextX][actionXIndex], 1);
-    eligibilityY[neural.contextY][actionYIndex] = Math.max(eligibilityY[neural.contextY][actionYIndex], 1);
-    for (let context = 0; context < CONTEXT_BINS; context += 1) {
-      for (let index = 0; index < ACTIONS.length; index += 1) {
-        episodeTraceX[context][index] = clamp(episodeTraceX[context][index] + eligibilityX[context][index] * dt, 0, 6);
-        episodeTraceY[context][index] = clamp(episodeTraceY[context][index] + eligibilityY[context][index] * dt, 0, 6);
-        ringTraceX[context][index] *= Math.exp(-dt * RING_TRACE_DECAY);
-        ringTraceY[context][index] *= Math.exp(-dt * RING_TRACE_DECAY);
-        if (ringVisible) {
-          const traceStep = dt * 1.6;
-          ringTraceX[context][index] = clamp(ringTraceX[context][index] + eligibilityX[context][index] * traceStep, 0, 7);
-          ringTraceY[context][index] = clamp(ringTraceY[context][index] + eligibilityY[context][index] * traceStep, 0, 7);
-          episodeVisualTraceX[context][index] = clamp(episodeVisualTraceX[context][index] + eligibilityX[context][index] * dt, 0, 6);
-          episodeVisualTraceY[context][index] = clamp(episodeVisualTraceY[context][index] + eligibilityY[context][index] * dt, 0, 6);
-        }
-      }
     }
 
     neural.progressRewardTimer -= dt;
     if (goalConfidence > 0.12 && neural.progressRewardTimer <= 0) {
-      const progressX = clamp((Math.abs(neural.rewardReferenceX) - Math.abs(goalErrorX)) * PROGRESS_REWARD_SCALE, -0.12, 0.12);
-      const progressY = clamp((Math.abs(neural.rewardReferenceY) - Math.abs(goalErrorY)) * PROGRESS_REWARD_SCALE, -0.12, 0.12);
-      if (Math.abs(progressX) + Math.abs(progressY) > 0.004) {
-        applyMovementReward(progressX, progressY, progressX + progressY > 0 ? COLORS.blue : COLORS.red);
-      }
-      neural.rewardReferenceX = goalErrorX;
-      neural.rewardReferenceY = goalErrorY;
+      const currentPotential = -Math.hypot(goalErrorX, goalErrorY) * goalConfidence;
+      const potentialReward = clamp((currentPotential - neural.rewardPotential) * 1.25, -0.12, 0.12);
+      if (Math.abs(potentialReward) > 0.004) applyMovementReward(potentialReward, potentialReward, potentialReward > 0 ? COLORS.blue : COLORS.red);
+      neural.rewardPotential = currentPotential;
       neural.progressRewardTimer = 0.12;
     }
 
-    const [jointMoveX, jointMoveY] = JOINT_ACTIONS[qActionIndex] || [0, 0];
-    const visualMoveX = learnedVisualGain > 0.02 && !oracleMode ? ACTIONS[actionXIndex] : 0;
-    const visualMoveY = learnedVisualGain > 0.02 && !oracleMode ? ACTIONS[actionYIndex] : 0;
+    const [jointMoveX, jointMoveY] = oracleMode ? [0, 0] : policyAction;
     const activeTarget = targets[nextTargetIndex];
     const activeRing = rings[nextRingIndex];
     let oracleAim = activeRing;
     if (oracleMode && activeTarget && (!activeRing || activeRing.z - player.z > 520) && activeTarget.z - player.z > 40 && activeTarget.z - player.z < 520) oracleAim = activeTarget;
     const oracleMoveX = oracleAim ? clamp((oracleAim.x - player.x) / 118, -1, 1) : 0;
     const oracleMoveY = oracleAim ? clamp((oracleAim.y - player.y) / 118, -1, 1) : 0;
-    const targetX = oracleMode ? oracleMoveX : jointMoveX * 0.55 + visualMoveX * 0.35 + neural.spontaneousX * 0.14 - neural.turnBiasX * 0.12;
-    const targetY = oracleMode ? oracleMoveY : jointMoveY * 0.55 + visualMoveY * 0.35 + neural.spontaneousY * 0.14 - neural.turnBiasY * 0.12;
+    const targetX = oracleMode ? oracleMoveX : jointMoveX;
+    const targetY = oracleMode ? oracleMoveY : jointMoveY;
     const motorMix = 1 - Math.exp(-dt * 5.5);
-    neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
-    neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
+    neural.moveX = lerp(neural.moveX, clamp(targetX, -1, 1), motorMix);
+    neural.moveY = lerp(neural.moveY, clamp(targetY, -1, 1), motorMix);
     const readoutMix = 1 - Math.exp(-dt * 9);
     neural.motorLeft = lerp(neural.motorLeft, Math.max(0, -neural.moveX), readoutMix);
     neural.motorRight = lerp(neural.motorRight, Math.max(0, neural.moveX), readoutMix);
@@ -796,21 +953,12 @@
       const targetVisual = Math.max(input.targetCenter * input.center, targetAlignment * 1.5);
       neural.frontLimb = lerp(neural.frontLimb, targetVisual, 1 - Math.exp(-dt * 15));
       fireEligibility = Math.max(fireEligibility * Math.exp(-dt * 1.4), targetVisual);
-      const fireThreshold = clamp(0.2 - firePreference * 0.04, 0.08, 0.26);
-      fireDecisionTimer -= dt;
-      if (fireDecisionTimer <= 0) {
-        const nextFireState = encodeFireState(input, targetDepth);
-        updateFireValue(nextFireState);
-        fireState = nextFireState;
-        fireAction = oracleMode ? 1 : chooseFireAction(nextFireState);
-        fireDecisionTimer = 0.13 + randomUnit() * 0.1;
-      }
-      if (targetVisual > fireThreshold && (oracleMode || fireAction === 1) && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
+      const fireThreshold = 0.14;
+      if (targetVisual > fireThreshold && (oracleMode || policyAction[2] === 1) && neural.fireCooldown <= 0 && targetDepth > 40 && targetDepth < 480) fire();
     } else {
       neural.frontLimb = lerp(neural.frontLimb, 0, 1 - Math.exp(-dt * 12));
       fireEligibility *= Math.exp(-dt * 1.4);
       fireDecisionTimer = 0;
-      fireAction = 0;
     }
     neural.dopamine = lerp(neural.dopamine, 0, 1 - Math.exp(-dt * 4));
   }
@@ -914,13 +1062,10 @@
   }
 
   function updateLearningReadout() {
-    const allQ = qValues.flat();
-    const qMean = allQ.reduce((sum, value) => sum + value, 0) / allQ.length;
-    const qPeak = Math.max(...allQ);
     const recentHits = ringHistory.slice(-MAX_RECENT_EPISODES);
     const recentRate = recentHits.length ? recentHits.reduce((sum, value) => sum + value, 0) / (recentHits.length * rings.length) : 0;
     const currentHits = rings.filter((ring) => ring.result === "hit").length;
-    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · joint Q policy · ε ${qEpsilon().toFixed(2)} · Q mean ${qMean.toFixed(2)} · peak ${qPeak.toFixed(2)} · updates ${qUpdates}.`;
+    ui.learning.textContent = `Episode ${episode} · ${currentHits}/${rings.length} rings · recent ${(recentRate * 100).toFixed(0)}% · recurrent actor-critic · noise ${policyNoise().toFixed(2)} · value updates ${policyUpdates} · top memories ${topPerformances.length}.`;
   }
 
   function getGraphWindow() {
@@ -1137,20 +1282,8 @@
   }
 
   function applyMovementReward(rewardX, rewardY, color = null) {
-    const deltaX = rewardX - movementBaselineX;
-    const deltaY = rewardY - movementBaselineY;
-    movementBaselineX = lerp(movementBaselineX, rewardX, BASELINE_MIX);
-    movementBaselineY = lerp(movementBaselineY, rewardY, BASELINE_MIX);
-    reinforcePreference(preferencesX, deltaX, eligibilityX);
-    reinforcePreference(preferencesY, deltaY, eligibilityY);
-    if (neural.goalMode === "ring") {
-      const visualDeltaX = deltaX >= 0 ? deltaX * 0.55 : deltaX * 0.15;
-      const visualDeltaY = deltaY >= 0 ? deltaY * 0.55 : deltaY * 0.15;
-      reinforceVisualTrace(visualPolicyX, eligibilityX, clamp(visualDeltaX, -0.12, 0.28));
-      reinforceVisualTrace(visualPolicyY, eligibilityY, clamp(visualDeltaY, -0.12, 0.28));
-    }
     const reward = (rewardX + rewardY) * 0.5;
-    qRewardAccumulator += reward;
+    policyRewardAccumulator += reward;
     lastReward = reward;
     rewardFlash = reward > 0 ? 0.65 : -0.55;
     rewardColor = color || (reward > 0 ? COLORS.green : COLORS.red);
@@ -1159,6 +1292,7 @@
   }
 
   function applyFireReward(reward, color = null) {
+    policyRewardAccumulator += reward;
     fireRewardAccumulator += reward;
     const delta = reward - fireBaseline;
     fireBaseline = lerp(fireBaseline, reward, BASELINE_MIX);
@@ -1210,11 +1344,9 @@
       const radius = RING_RADIUS - RING_CLEARANCE;
       const xQuality = 1 - clamp(horizontalError / radius, 0, 1);
       const yQuality = 1 - clamp(verticalError / radius, 0, 1);
-      updateLearnedVisualGain(success, (xQuality + yQuality) * 0.5);
       const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
       const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
-      learnFromRingOutcome(success, xQuality, yQuality, neural.goalErrorX, neural.goalErrorY);
       nextRingIndex += 1;
       retinalTrackX = null;
       retinalTrackY = null;
@@ -1246,8 +1378,7 @@
     const wasEvaluation = evaluationMode;
     const wasOracle = oracleMode;
     running = false;
-    finalizeQEpisode();
-    finalizeFireEpisode();
+    finishPolicyEpisode();
     evaluationMode = false;
     oracleMode = false;
     if (!wasEvaluation) recordEpisodeStats();
@@ -1262,7 +1393,6 @@
   function recordEpisodeStats() {
     if (episodeRecorded) return;
     episodeRecorded = true;
-    learnFromCompletedEpisode();
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
     if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();

@@ -109,9 +109,9 @@
           <div class="control-list" aria-label="Neural replay information">
             <span>48 × 27 camera image supplies visual activity</span>
             <span>Retinal ring position, apparent size, and motion form the policy state</span>
-            <span>Joint 2D actions are updated with temporal-difference learning</span>
+            <span>A recurrent actor outputs continuous 2D motor drive and a firing decision</span>
             <span>Target alignment reinforces movement and firing separately</span>
-            <span>Exploration gradually decays across episodes</span>
+            <span>Multi-step returns, prioritized replay, and top-performance rehearsal reinforce progress</span>
             <span>Stationary and randomized courses support transfer testing</span>
             <span>Front-limb activity triggers firing</span>
             <span>NeuroMechFly-derived scanned body mesh</span>
@@ -202,6 +202,6 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
-    <script src="neural-replay.js?v=c603e70"></script>
+    <script src="neural-replay.js?v=actor-critic-20260912"></script>
   </body>
 </html>
