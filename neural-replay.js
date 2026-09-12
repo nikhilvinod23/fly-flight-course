@@ -52,17 +52,22 @@
   const EXPLORATION_DECAY = 180;
   const CONTEXT_BINS = 9;
   const POLICY_BIAS_SCALE = 0.5;
+  const VISUAL_POLICY_RATE = 0.18;
+  const VISUAL_POLICY_TRACE_SCALE = 0.9;
+  const VISUAL_POLICY_LIMIT = 2.5;
   const MAX_LEARNED_VISUAL_GAIN = 0.78;
   const VISUAL_GAIN_SUCCESS_STEP = 0.07;
   const VISUAL_GAIN_MISS_STEP = 0.006;
   const EPISODE_BASELINE_MIX = 0.06;
   const EPISODE_TRACE_SCALE = 0.4;
+  const RING_TRACE_SCALE = 0.9;
+  const RING_TRACE_DECAY = 0.9;
   const RECORD_TRACE_BONUS = 0.5;
   const RECORD_STEERING_GAIN_BONUS = 0.08;
   const TOP_PERFORMANCE_COUNT = 10;
   const ELIGIBILITY_DECAY = 0.42;
   const BASELINE_MIX = 0.08;
-  const PROGRESS_REWARD_SCALE = 0.65;
+  const PROGRESS_REWARD_SCALE = 0.95;
   const RING_SUCCESS_REWARD = 1.4;
   const RING_MISS_REWARD = -0.75;
   const TARGET_REWARD = 0.5;
@@ -74,6 +79,7 @@
   const MAX_STORED_EPISODES = 500;
   const RETINA_WIDTH = 48;
   const RETINA_HEIGHT = 27;
+  const CURRICULUM_RAMP_EPISODES = 160;
   const GRAPH_PADDING = { left: 32, right: 34, top: 16, bottom: 24 };
 
   const baseRingX = [-250, 190, -80, 245, -220, 70, -245, 225, -35, 250];
@@ -106,12 +112,18 @@
   let actionYIndex = 2;
   let preferencesX = freshPreferences();
   let preferencesY = freshPreferences();
+  let visualPolicyX = freshPreferences();
+  let visualPolicyY = freshPreferences();
   let eligibilityX = null;
   let eligibilityY = null;
   let movementBaselineX = 0;
   let movementBaselineY = 0;
   let episodeTraceX = freshEligibility();
   let episodeTraceY = freshEligibility();
+  let episodeVisualTraceX = freshEligibility();
+  let episodeVisualTraceY = freshEligibility();
+  let ringTraceX = freshEligibility();
+  let ringTraceY = freshEligibility();
   let episodeScoreBaseline = 0;
   let topPerformances = [];
   let learnedVisualGain = 0;
@@ -170,7 +182,7 @@
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 4294967296;
     };
-    const variation = episodeNumber === 0 ? 0 : Math.min(1, episodeNumber / 80);
+    const variation = episodeNumber === 0 ? 0 : Math.min(1, episodeNumber / CURRICULUM_RAMP_EPISODES);
     return baseRingX.map((baseX, index) => ({
       x: clamp(baseX + (next() * 2 - 1) * 72 * variation, -265, 265),
       y: clamp(baseRingY[index] + (next() * 2 - 1) * 58 * variation, -180, 180),
@@ -211,6 +223,10 @@
     fireEligibility = 0;
     episodeTraceX = freshEligibility();
     episodeTraceY = freshEligibility();
+    episodeVisualTraceX = freshEligibility();
+    episodeVisualTraceY = freshEligibility();
+    ringTraceX = freshEligibility();
+    ringTraceY = freshEligibility();
     rings = createRings(episode);
     episodeRingHits = 0;
     episodeRecorded = false;
@@ -230,6 +246,8 @@
     if (running || fastForwarding) return;
     preferencesX = freshPreferences();
     preferencesY = freshPreferences();
+    visualPolicyX = freshPreferences();
+    visualPolicyY = freshPreferences();
     eligibilityX = freshEligibility();
     eligibilityY = freshEligibility();
     movementBaselineX = 0;
@@ -276,6 +294,7 @@
     let ringWeight = 0;
     let ringCentroidX = 0;
     let ringCentroidY = 0;
+    const ringMask = new Array(RETINA_WIDTH * RETINA_HEIGHT).fill(0);
     let targetWeight = 0;
     let targetCentroidX = 0;
     let targetCentroidY = 0;
@@ -306,6 +325,7 @@
           ringWeight += ringPixelWeight;
           ringCentroidX += x * ringPixelWeight;
           ringCentroidY += y * ringPixelWeight;
+          ringMask[y * RETINA_WIDTH + x] = ringPixelWeight;
         }
       }
     }
@@ -340,35 +360,87 @@
     const targetCenter = (targetX + targetY) / ((centerX1 - centerX0) * rowCount + (centerY1 - centerY0) * RETINA_WIDTH);
     const targetColumnCenter = targetWeight ? targetCentroidX / targetWeight : RETINA_WIDTH * 0.5;
     const targetRowCenter = targetWeight ? targetCentroidY / targetWeight : RETINA_HEIGHT * 0.5;
-    const ringColumnCenter = ringWeight ? ringCentroidX / ringWeight : RETINA_WIDTH * 0.5;
-    const ringRowCenter = ringWeight ? ringCentroidY / ringWeight : RETINA_HEIGHT * 0.5;
+    // Treat the low-resolution retina as the sensor, then group nearby
+    // saturated pixels into objects. The largest colored object is usually
+    // the nearest ring, so movement is based on one gate instead of the
+    // centroid of every visible gate in the scene.
+    const visited = new Uint8Array(ringMask.length);
+    const components = [];
+    for (let y = yStart; y < yEnd; y += 1) {
+      for (let x = 0; x < RETINA_WIDTH; x += 1) {
+        const start = y * RETINA_WIDTH + x;
+        if (!ringMask[start] || visited[start]) continue;
+        const stack = [start];
+        visited[start] = 1;
+        let weight = 0;
+        let centroidX = 0;
+        let centroidY = 0;
+        let count = 0;
+        while (stack.length) {
+          const current = stack.pop();
+          const currentX = current % RETINA_WIDTH;
+          const currentY = Math.floor(current / RETINA_WIDTH);
+          const currentWeight = ringMask[current];
+          weight += currentWeight;
+          centroidX += currentX * currentWeight;
+          centroidY += currentY * currentWeight;
+          count += 1;
+          for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+            for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+              if (!offsetX && !offsetY) continue;
+              const neighborX = currentX + offsetX;
+              const neighborY = currentY + offsetY;
+              if (neighborX < 0 || neighborX >= RETINA_WIDTH || neighborY < yStart || neighborY >= yEnd) continue;
+              const neighbor = neighborY * RETINA_WIDTH + neighborX;
+              if (ringMask[neighbor] && !visited[neighbor]) {
+                visited[neighbor] = 1;
+                stack.push(neighbor);
+              }
+            }
+          }
+        }
+        if (count >= 2 && weight > 0.35) components.push({ weight, centroidX, centroidY, count });
+      }
+    }
+    components.sort((a, b) => b.weight - a.weight);
+    const nearestRing = components[0] || null;
+    const selectedRingWeight = nearestRing ? nearestRing.weight : ringWeight;
+    const ringColumnCenter = nearestRing
+      ? nearestRing.centroidX / nearestRing.weight
+      : ringWeight ? ringCentroidX / ringWeight : RETINA_WIDTH * 0.5;
+    const ringRowCenter = nearestRing
+      ? nearestRing.centroidY / nearestRing.weight
+      : ringWeight ? ringCentroidY / ringWeight : RETINA_HEIGHT * 0.5;
     return {
       left: clamp(left * 2.45, 0, 1), right: clamp(right * 2.45, 0, 1),
       up: clamp(up * 2.7, 0, 1), down: clamp(down * 2.7, 0, 1),
       center: clamp(center * 2.2, 0, 1), targetCenter: clamp(targetCenter * 6.5, 0, 1),
       ringErrorX: clamp((ringColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
       ringErrorY: clamp((RETINA_HEIGHT * 0.5 - ringRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
-      ringConfidence: clamp(ringWeight / 20, 0, 1),
-      ringSize: clamp(Math.sqrt(ringWeight / 60), 0, 1),
+      ringConfidence: clamp(selectedRingWeight / 10, 0, 1),
+      ringSize: clamp(Math.sqrt(selectedRingWeight / 30), 0, 1),
       targetErrorX: clamp((targetColumnCenter - RETINA_WIDTH * 0.5) / (RETINA_WIDTH * 0.5), -1, 1),
       targetErrorY: clamp((RETINA_HEIGHT * 0.5 - targetRowCenter) / (RETINA_HEIGHT * 0.5), -1, 1),
       targetConfidence: clamp(targetWeight / 12, 0, 1)
     };
   }
 
-  function selectAxisAction(axis, goalError) {
+  function selectAxisAction(axis) {
     const isX = axis === "x";
     const context = isX ? neural.contextX : neural.contextY;
     const preferences = isX ? preferencesX : preferencesY;
+    const visualPolicy = isX ? visualPolicyX : visualPolicyY;
     const spontaneous = isX ? neural.spontaneousX : neural.spontaneousY;
     const adaptation = isX ? neural.turnBiasX : neural.turnBiasY;
     let bestIndex = 0;
     let bestScore = -Infinity;
     ACTIONS.forEach((action, index) => {
-      const learnedVisualReflex = learnedVisualGain * goalError * 0.22 * action;
+      // Visual input only influences movement through this learned table. It
+      // starts at zero, so the untrained fly does not have an innate ring reflex.
+      const learnedVisualPolicy = visualPolicy[context][index] * (0.35 + learnedVisualGain * 0.65);
       const spontaneousBias = spontaneous * action * 0.23;
       const adaptationBias = -adaptation * action * 0.27;
-      const score = preferences[context][index] * POLICY_BIAS_SCALE + learnedVisualReflex + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
+      const score = preferences[context][index] * POLICY_BIAS_SCALE + learnedVisualPolicy + spontaneousBias + adaptationBias + sensoryNoise(explorationNoise());
       if (score > bestScore) { bestScore = score; bestIndex = index; }
     });
     if (isX) actionXIndex = bestIndex; else actionYIndex = bestIndex;
@@ -414,8 +486,8 @@
 
     neural.decisionTimer -= dt;
     if (neural.decisionTimer <= 0) {
-      selectAxisAction("x", goalErrorX);
-      selectAxisAction("y", goalErrorY);
+      selectAxisAction("x");
+      selectAxisAction("y");
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
     const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
@@ -427,6 +499,15 @@
       for (let index = 0; index < ACTIONS.length; index += 1) {
         episodeTraceX[context][index] = clamp(episodeTraceX[context][index] + eligibilityX[context][index] * dt, 0, 6);
         episodeTraceY[context][index] = clamp(episodeTraceY[context][index] + eligibilityY[context][index] * dt, 0, 6);
+        ringTraceX[context][index] *= Math.exp(-dt * RING_TRACE_DECAY);
+        ringTraceY[context][index] *= Math.exp(-dt * RING_TRACE_DECAY);
+        if (ringVisible) {
+          const traceStep = dt * 1.6;
+          ringTraceX[context][index] = clamp(ringTraceX[context][index] + eligibilityX[context][index] * traceStep, 0, 7);
+          ringTraceY[context][index] = clamp(ringTraceY[context][index] + eligibilityY[context][index] * traceStep, 0, 7);
+          episodeVisualTraceX[context][index] = clamp(episodeVisualTraceX[context][index] + eligibilityX[context][index] * dt, 0, 6);
+          episodeVisualTraceY[context][index] = clamp(episodeVisualTraceY[context][index] + eligibilityY[context][index] * dt, 0, 6);
+        }
       }
     }
 
@@ -442,10 +523,8 @@
       neural.progressRewardTimer = 0.12;
     }
 
-    const visualSteeringX = goalErrorX * goalConfidence * learnedVisualGain;
-    const visualSteeringY = goalErrorY * goalConfidence * learnedVisualGain;
-    const targetX = ACTIONS[actionXIndex] * 0.58 + visualSteeringX + neural.spontaneousX * 0.22 - neural.turnBiasX * 0.15;
-    const targetY = ACTIONS[actionYIndex] * 0.58 + visualSteeringY + neural.spontaneousY * 0.22 - neural.turnBiasY * 0.15;
+    const targetX = ACTIONS[actionXIndex] * 0.64 + neural.spontaneousX * 0.2 - neural.turnBiasX * 0.15;
+    const targetY = ACTIONS[actionYIndex] * 0.64 + neural.spontaneousY * 0.2 - neural.turnBiasY * 0.15;
     const motorMix = 1 - Math.exp(-dt * 5.5);
     neural.moveX = lerp(neural.moveX, clamp(targetX + sensoryNoise(0.05), -1, 1), motorMix);
     neural.moveY = lerp(neural.moveY, clamp(targetY + sensoryNoise(0.05), -1, 1), motorMix);
@@ -490,6 +569,27 @@
     }
   }
 
+  function reinforceVisualTrace(policy, trace, strength) {
+    for (let context = 0; context < policy.length; context += 1) {
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        policy[context][index] += VISUAL_POLICY_RATE * strength * trace[context][index];
+      }
+      policy[context] = policy[context].map((value) => clamp(value, -VISUAL_POLICY_LIMIT, VISUAL_POLICY_LIMIT));
+    }
+  }
+
+  function learnFromRingOutcome(success, xQuality, yQuality) {
+    const quality = (xQuality + yQuality) * 0.5;
+    const ringAdvantage = success ? 1.15 + quality * 0.85 : -0.85 + quality * 0.25;
+    const visualAdvantage = success ? 1.2 + quality * 0.8 : -0.9;
+    reinforceTrace(preferencesX, ringTraceX, ringAdvantage * RING_TRACE_SCALE);
+    reinforceTrace(preferencesY, ringTraceY, ringAdvantage * RING_TRACE_SCALE);
+    reinforceVisualTrace(visualPolicyX, ringTraceX, visualAdvantage * VISUAL_POLICY_TRACE_SCALE);
+    reinforceVisualTrace(visualPolicyY, ringTraceY, visualAdvantage * VISUAL_POLICY_TRACE_SCALE);
+    ringTraceX = freshEligibility();
+    ringTraceY = freshEligibility();
+  }
+
   function cloneTrace(trace) { return trace.map((row) => row.slice()); }
 
   function updateLearnedVisualGain(success, quality = 0) {
@@ -505,10 +605,16 @@
     const advantage = clamp(score - episodeScoreBaseline, -4, 4);
     reinforceTrace(preferencesX, episodeTraceX, advantage * EPISODE_TRACE_SCALE);
     reinforceTrace(preferencesY, episodeTraceY, advantage * EPISODE_TRACE_SCALE);
+    reinforceVisualTrace(visualPolicyX, episodeVisualTraceX, advantage * EPISODE_TRACE_SCALE);
+    reinforceVisualTrace(visualPolicyY, episodeVisualTraceY, advantage * EPISODE_TRACE_SCALE);
     episodeScoreBaseline = lerp(episodeScoreBaseline, score, EPISODE_BASELINE_MIX);
 
     const bestBefore = topPerformances.length ? topPerformances[0].score : -Infinity;
-    const candidate = { score, rings: episodeRingHits, shots, traceX: cloneTrace(episodeTraceX), traceY: cloneTrace(episodeTraceY) };
+    const candidate = {
+      score, rings: episodeRingHits, shots,
+      traceX: cloneTrace(episodeTraceX), traceY: cloneTrace(episodeTraceY),
+      visualTraceX: cloneTrace(episodeVisualTraceX), visualTraceY: cloneTrace(episodeVisualTraceY)
+    };
     if (score > 0) {
       topPerformances.push(candidate);
       topPerformances.sort((a, b) => b.score - a.score);
@@ -521,6 +627,8 @@
         const replayStrength = RECORD_TRACE_BONUS * (1 - index / TOP_PERFORMANCE_COUNT);
         reinforceTrace(preferencesX, performance.traceX, replayStrength);
         reinforceTrace(preferencesY, performance.traceY, replayStrength);
+        reinforceVisualTrace(visualPolicyX, performance.visualTraceX, replayStrength);
+        reinforceVisualTrace(visualPolicyY, performance.visualTraceY, replayStrength);
       });
     }
   }
@@ -750,6 +858,10 @@
     movementBaselineY = lerp(movementBaselineY, rewardY, BASELINE_MIX);
     reinforcePreference(preferencesX, deltaX, eligibilityX);
     reinforcePreference(preferencesY, deltaY, eligibilityY);
+    if (neural.goalMode === "ring") {
+      reinforceVisualTrace(visualPolicyX, eligibilityX, clamp(deltaX * 0.7, -0.35, 0.35));
+      reinforceVisualTrace(visualPolicyY, eligibilityY, clamp(deltaY * 0.7, -0.35, 0.35));
+    }
     const reward = (rewardX + rewardY) * 0.5;
     lastReward = reward;
     rewardFlash = reward > 0 ? 0.65 : -0.55;
@@ -813,6 +925,7 @@
       const rewardX = success ? RING_SUCCESS_REWARD * (0.75 + xQuality * 0.25) : xQuality > 0 ? xQuality * 0.18 : RING_MISS_REWARD;
       const rewardY = success ? RING_SUCCESS_REWARD * (0.75 + yQuality * 0.25) : yQuality > 0 ? yQuality * 0.18 : RING_MISS_REWARD;
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
+      learnFromRingOutcome(success, xQuality, yQuality);
       nextRingIndex += 1;
     }
     for (const target of targets) {
