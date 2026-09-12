@@ -185,6 +185,8 @@
   let sensorySeed = 0x4f1bbcdc;
   let previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
   let previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
+  let retinalTrackX = null;
+  let retinalTrackY = null;
   let retinalDiagnostic = { detectedX: null, detectedY: null, actualX: null, actualY: null, confidence: 0 };
 
   const neural = {
@@ -210,7 +212,7 @@
   function freshPreferences() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshEligibility() { return Array.from({ length: CONTEXT_BINS }, () => ACTIONS.map(() => 0)); }
   function freshQValues() { return Array.from({ length: Q_STATE_COUNT }, () => new Array(JOINT_ACTIONS.length).fill(0)); }
-  function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0]); }
+  function freshFireQValues() { return Array.from({ length: FIRE_STATE_COUNT }, () => [0, 0.035]); }
   function qEpsilon() { return evaluationMode ? 0 : Math.max(Q_EPSILON_FLOOR, Q_EPSILON_START * Math.exp(-episode / Q_EPSILON_DECAY)); }
   function signedBin(value, bins) {
     return clamp(Math.floor((clamp(value, -1, 1) + 1) * 0.5 * bins), 0, bins - 1);
@@ -230,7 +232,7 @@
     if (values[1] === values[0]) return inputFireTieBreak();
     return values[1] > values[0] ? 1 : 0;
   }
-  function inputFireTieBreak() { return 0; }
+  function inputFireTieBreak() { return 1; }
   function updateFireValue(nextState, terminal = false) {
     if (fireState === null || evaluationMode) return;
     const current = fireQValues[fireState][fireAction];
@@ -379,6 +381,8 @@
     sensorySeed = (0x4f1bbcdc + episode * 1103515245) >>> 0;
     previousRetinaColumns = new Array(RETINA_WIDTH).fill(0);
     previousRetinaRows = new Array(RETINA_HEIGHT).fill(0);
+    retinalTrackX = null;
+    retinalTrackY = null;
     retinalDiagnostic = { detectedX: null, detectedY: null, actualX: null, actualY: null, confidence: 0 };
     rings.forEach((ring) => { ring.result = null; });
     if (render) {
@@ -569,7 +573,14 @@
       }
     }
     components.sort((a, b) => b.weight - a.weight);
-    const nearestRing = components[0] || null;
+    let nearestRing = components[0] || null;
+    if (retinalTrackX !== null && retinalTrackY !== null && components.length) {
+      const trackedCandidates = components
+        .map((component) => ({ component, distance: Math.hypot(component.centroidX / component.weight - retinalTrackX, component.centroidY / component.weight - retinalTrackY) }))
+        .filter(({ distance }) => distance <= 8)
+        .sort((a, b) => (b.component.weight / (1 + b.distance)) - (a.component.weight / (1 + a.distance)));
+      if (trackedCandidates.length) nearestRing = trackedCandidates[0].component;
+    }
     const selectedRingWeight = nearestRing ? nearestRing.weight : ringWeight;
     const ringColumnCenter = nearestRing
       ? nearestRing.centroidX / nearestRing.weight
@@ -577,6 +588,13 @@
     const ringRowCenter = nearestRing
       ? nearestRing.centroidY / nearestRing.weight
       : ringWeight ? ringCentroidY / ringWeight : RETINA_HEIGHT * 0.5;
+    if (nearestRing) {
+      retinalTrackX = ringColumnCenter;
+      retinalTrackY = ringRowCenter;
+    } else {
+      retinalTrackX = null;
+      retinalTrackY = null;
+    }
     const actualRing = rings[nextRingIndex];
     const actualProjection = actualRing ? project(actualRing.x, actualRing.y, actualRing.z) : null;
     const actualColumnCenter = actualProjection
@@ -687,6 +705,10 @@
       const [jointX, jointY] = JOINT_ACTIONS[qActionIndex];
       actionXIndex = jointX < 0 ? 0 : jointX > 0 ? 4 : 2;
       actionYIndex = jointY < 0 ? 0 : jointY > 0 ? 4 : 2;
+      if (ringVisible && !oracleMode) {
+        const visualAlignment = (jointX * input.ringErrorX + jointY * input.ringErrorY) * 0.5;
+        qRewardAccumulator += clamp(visualAlignment * 0.05 * input.ringConfidence, -0.08, 0.08);
+      }
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
     const eligibilityMix = Math.exp(-dt * ELIGIBILITY_DECAY);
@@ -1171,6 +1193,8 @@
       applyMovementReward(rewardX, rewardY, success ? ring.color : COLORS.red);
       learnFromRingOutcome(success, xQuality, yQuality, neural.goalErrorX, neural.goalErrorY);
       nextRingIndex += 1;
+      retinalTrackX = null;
+      retinalTrackY = null;
     }
     for (const target of targets) {
       if (!target.hit && !target.missed && player.z > target.z + 75) {
