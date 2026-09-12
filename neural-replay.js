@@ -234,6 +234,7 @@
   let episodeRecorded = false;
   let ringHistory = [];
   let targetHistory = [];
+  let courseModeHistory = [];
   let fastForwarding = false;
   let fastForwardState = null;
   let graphMode = "full";
@@ -854,6 +855,7 @@
     fireEligibility = 0;
     ringHistory = [];
     targetHistory = [];
+    courseModeHistory = [];
     episode = 0;
     resetEpisode();
     drawTrainingGraph();
@@ -1503,7 +1505,9 @@
     const shots = targetHistory[episodeNumber - 1] ?? 0;
     const ringAverage = rollingAverageAt(ringHistory, episodeNumber);
     const shotAverage = rollingAverageAt(targetHistory, episodeNumber);
-    ui.graphProbe.textContent = `EPISODE ${episodeNumber} · RINGS ${rings}/10 · SHOTS ${shots}/2 · 10-EP AVG RINGS ${ringAverage.toFixed(1)} · SHOTS ${shotAverage.toFixed(1)}`;
+    const mode = courseModeHistory[episodeNumber - 1] || "stationary";
+    const modeLabel = mode === "randomized" ? "RANDOMIZED MAP" : "STATIONARY MAP";
+    ui.graphProbe.textContent = `EPISODE ${episodeNumber} · ${modeLabel} · RINGS ${rings}/10 · SHOTS ${shots}/2 · 10-EP AVG RINGS ${ringAverage.toFixed(1)} · SHOTS ${shotAverage.toFixed(1)}`;
   }
 
   function graphEpisodeAtClientX(clientX) {
@@ -1625,10 +1629,38 @@
       trainingCtx.stroke();
       trainingCtx.setLineDash([]);
     };
+    const drawCourseModeMarkers = () => {
+      if (!courseModeHistory.length || !ringHistory.length) return;
+      const visible = visibleValues(ringHistory);
+      visible.forEach((value, index) => {
+        const episodeNumber = graphWindow.dataStart + index + 1;
+        const mode = courseModeHistory[episodeNumber - 1] || "stationary";
+        const x = xForEpisode(episodeNumber);
+        const y = yFor(value, 10);
+        trainingCtx.save();
+        trainingCtx.fillStyle = mode === "randomized" ? "#7bd7ff" : "#58d68d";
+        trainingCtx.strokeStyle = "#030914";
+        trainingCtx.lineWidth = 1;
+        trainingCtx.beginPath();
+        if (mode === "randomized") {
+          trainingCtx.moveTo(x, y - 4);
+          trainingCtx.lineTo(x + 4, y);
+          trainingCtx.lineTo(x, y + 4);
+          trainingCtx.lineTo(x - 4, y);
+          trainingCtx.closePath();
+        } else {
+          trainingCtx.arc(x, y, 3.5, 0, Math.PI * 2);
+        }
+        trainingCtx.fill();
+        trainingCtx.stroke();
+        trainingCtx.restore();
+      });
+    };
     if (graphVisibility.ringAverage) drawMovingAverage(ringHistory, 10, "#b4f3ca");
     if (graphVisibility.shotAverage) drawMovingAverage(targetHistory, 2, "#ffd27b");
     if (graphVisibility.rings) drawSeries(ringHistory, 10, "#58d68d");
     if (graphVisibility.shots) drawSeries(targetHistory, 2, "#f1ad45");
+    drawCourseModeMarkers();
     if (graphProbeEpisode !== null && ringHistory.length) {
       const probeEpisode = clamp(graphProbeEpisode, Math.max(1, graphWindow.axisStart), Math.min(ringHistory.length, graphWindow.axisEnd));
       const probeX = xForEpisode(probeEpisode);
@@ -1645,7 +1677,8 @@
     if (ui.graphSummary) {
       const lastRings = ringHistory.length ? ringHistory[ringHistory.length - 1] : 0;
       const lastShots = targetHistory.length ? targetHistory[targetHistory.length - 1] : 0;
-      ui.graphSummary.textContent = ringHistory.length ? `${ringHistory.length} EPISODES · LAST ${lastRings}/10 RINGS · ${lastShots}/2 SHOTS` : "NO COMPLETED EPISODES";
+      const lastMode = courseModeHistory.length ? (courseModeHistory[courseModeHistory.length - 1] === "randomized" ? "RANDOMIZED" : "STATIONARY") : "STATIONARY";
+      ui.graphSummary.textContent = ringHistory.length ? `${ringHistory.length} EPISODES · LAST ${lastRings}/10 RINGS · ${lastShots}/2 SHOTS · ${lastMode} MAP` : "NO COMPLETED EPISODES";
     }
     updateGraphStats();
     updateGraphProbe();
@@ -1766,8 +1799,10 @@
     episodeRecorded = true;
     ringHistory.push(episodeRingHits);
     targetHistory.push(targets.filter((target) => target.hit).length);
+    courseModeHistory.push(courseMode);
     if (ringHistory.length > MAX_STORED_EPISODES) ringHistory.shift();
     if (targetHistory.length > MAX_STORED_EPISODES) targetHistory.shift();
+    if (courseModeHistory.length > MAX_STORED_EPISODES) courseModeHistory.shift();
     drawTrainingGraph();
     updateLearningReadout();
   }
