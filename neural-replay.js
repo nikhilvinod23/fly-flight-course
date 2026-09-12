@@ -110,8 +110,8 @@
   const PROGRESS_REWARD_SCALE = 0.95;
   const RING_SUCCESS_REWARD = 1.4;
   const RING_MISS_REWARD = -0.75;
-  const TARGET_REWARD = 0.5;
-  const TARGET_MISS_REWARD = -0.18;
+  const TARGET_REWARD = 1.6;
+  const TARGET_MISS_REWARD = -0.28;
   const FAST_FORWARD_DT = 1 / 20;
   const FAST_FORWARD_CHUNK = 80;
   const MAX_RECENT_EPISODES = 10;
@@ -878,7 +878,7 @@
     const previousGoalMode = neural.goalMode;
     const ringVisible = input.ringConfidence > 0.12;
     const targetVisible = input.targetConfidence > 0.10;
-    const targetPriority = targetVisible && (input.targetConfidence > input.ringConfidence * 0.58 || input.targetCenter > 0.28);
+    const targetPriority = targetVisible;
     const goalMode = targetPriority ? "target" : ringVisible ? "ring" : targetVisible ? "target" : "none";
     const goalErrorX = goalMode === "ring" ? input.ringErrorX : goalMode === "target" ? input.targetErrorX : differenceX;
     const goalErrorY = goalMode === "ring" ? input.ringErrorY : goalMode === "target" ? input.targetErrorY : differenceY;
@@ -940,7 +940,7 @@
       }
       if (targetVisible && !oracleMode) {
         const targetAlignmentReward = (moveX * input.targetErrorX + moveY * input.targetErrorY) * 0.5;
-        policyRewardAccumulator += clamp(targetAlignmentReward * 0.16 * input.targetConfidence, -0.12, 0.12);
+        policyRewardAccumulator += clamp(targetAlignmentReward * 0.3 * input.targetConfidence, -0.2, 0.2);
       }
       neural.decisionTimer = 0.15 + randomUnit() * 0.15;
     }
